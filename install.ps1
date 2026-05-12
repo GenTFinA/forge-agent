@@ -293,6 +293,10 @@ if (Test-Path "$RepoDir\shared\forge-domain-probes.md") {
     CopyFile "$RepoDir\shared\forge-domain-probes.md" "$ClaudeDir\forge-domain-probes.md"
     Info "  forge-domain-probes.md"
 }
+if (Test-Path "$RepoDir\shared\forge-principles.md") {
+    CopyFile "$RepoDir\shared\forge-principles.md" "$ClaudeDir\forge-principles.md"
+    Info "  forge-principles.md"
+}
 
 # ── Install runtime scripts (scripts/forge-*.js invoked by skills/dispatch) ────
 Write-Host ""

@@ -323,6 +323,10 @@ if [ -f "${REPO_DIR}/shared/forge-domain-probes.md" ]; then
   copy "${REPO_DIR}/shared/forge-domain-probes.md" "${CLAUDE_DIR}/forge-domain-probes.md"
   info "  forge-domain-probes.md"
 fi
+if [ -f "${REPO_DIR}/shared/forge-principles.md" ]; then
+  copy "${REPO_DIR}/shared/forge-principles.md" "${CLAUDE_DIR}/forge-principles.md"
+  info "  forge-principles.md"
+fi
 
 echo ""
 info "Installing statusline & hooks..."
