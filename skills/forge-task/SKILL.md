@@ -71,6 +71,9 @@ fi
 
 **Multi-run check** — refuse if too many active and no explicit resume:
 ```bash
+# Migrate legacy STATE.md FIRST (idempotent) — required before any dashboard regen below
+node "$FORGE_SCRIPTS_DIR/forge-runs.js" --migrate-legacy --cwd "$(pwd)" > /dev/null 2>&1 || true
+
 if [ -z "$TASK_ID" ]; then
   RESOLVE=$(node "$FORGE_SCRIPTS_DIR/forge-cli-helpers.js" --resolve-args --args "" --command forge-task)
   STATUS=$(node -e "process.stdout.write(JSON.parse(process.argv[1]).status)" "$RESOLVE")

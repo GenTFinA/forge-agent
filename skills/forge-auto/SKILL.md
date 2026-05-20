@@ -106,6 +106,15 @@ Branch on `$AUTO_STATE`:
 
 Resolve which run this invocation operates on, based on `$ARGUMENTS` and the active-run registry. This block runs BEFORE the legacy single-run activation below.
 
+**Step 0 — Migrate legacy STATE.md (idempotent; required BEFORE dashboard regen):**
+If the workspace has a pre-M004 single-run `.gsd/STATE.md` (no `<!-- AUTO-GENERATED -->` header) AND no `runs/*.json` exists yet, migrate the legacy state to per-milestone format. This MUST run before any dashboard regeneration — otherwise the legacy state data is destroyed by the dashboard overwrite.
+
+```bash
+node "$FORGE_SCRIPTS_DIR/forge-runs.js" --migrate-legacy --cwd "$WORKING_DIR" > /dev/null 2>&1 || true
+```
+
+The script is idempotent: returns `{migrated: false, reason: "already dashboard"}` if already migrated, or `{migrated: false, reason: "no Active Milestone field"}` if STATE.md doesn't have legacy format. Either case is a no-op. Successful migration creates `M###-STATE.md` from the legacy fields (Active Slice/Task/Phase/Auto-mode/Next Action preserved verbatim).
+
 ```bash
 RESOLVE=$(node "$FORGE_SCRIPTS_DIR/forge-cli-helpers.js" --resolve-args --args "$ARGUMENTS" --command forge-auto)
 STATUS=$(node -e "process.stdout.write(JSON.parse(process.argv[1]).status)" "$RESOLVE")
