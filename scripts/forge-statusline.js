@@ -51,13 +51,20 @@ process.stdin.on('end', () => {
       const stateFile = path.join(cwd, '.gsd', 'STATE.md');
       const state     = fs.readFileSync(stateFile, 'utf8');
 
-      // New STATE format uses "## Active Milestone" heading. Fall back to legacy bold form.
+      // Format resolution (M004+): try in order
+      //   1. M004 dashboard: "- **M###** — milestone ..." inside Active runs section
+      //   2. Pre-M004 ## Active Milestone heading form
+      //   3. Pre-M004 legacy **Active Milestone:** bold form
       let milestoneText = '';
-      const headMatch = state.match(/^## Active Milestone\s*\n([^\n]+)/mi);
-      if (headMatch) milestoneText = headMatch[1].trim();
+      const dashMatch = state.match(/^-\s+\*\*(M\d+)\*\*\s+—\s+milestone\b/m);
+      if (dashMatch) milestoneText = dashMatch[1];
       else {
-        const legacy = state.match(/\*\*Active Milestone:\*\*\s*([^\n]+)/i);
-        if (legacy) milestoneText = legacy[1].trim();
+        const headMatch = state.match(/^## Active Milestone\s*\n([^\n]+)/mi);
+        if (headMatch) milestoneText = headMatch[1].trim();
+        else {
+          const legacy = state.match(/\*\*Active Milestone:\*\*\s*([^\n]+)/i);
+          if (legacy) milestoneText = legacy[1].trim();
+        }
       }
 
       const mId = milestoneText && !/^—|^\(none\)/i.test(milestoneText)

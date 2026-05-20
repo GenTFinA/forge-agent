@@ -135,7 +135,12 @@ Branch on `$STATUS`:
   echo "$MSG"
   ```
   Then continue to legacy activation (which writes auto-mode-started.txt + alias).
-- **`resume`** — emit `$MSG`, set `RUN_ID` (already set), reuse existing registry entry. Don't re-register.
+- **`resume`** — emit `$MSG`, set `RUN_ID` (already set). Update the existing registry entry with the new session_id (the previous orchestrator process exited; this is a fresh session that needs to own heartbeat updates):
+  ```bash
+  SESSION_ID="${CLAUDE_SESSION_ID:-$(node -e "process.stdout.write(require('crypto').randomBytes(8).toString('hex'))")}"
+  node "$FORGE_SCRIPTS_DIR/forge-runs.js" --update "$RUN_ID" --json "{\"session_id\":\"$SESSION_ID\",\"active\":true}" > /dev/null
+  ```
+  Without this, `forge-hook.resolveBySessionId` won't match — heartbeats fall back to legacy `auto-mode.json` and `runs/{id}.json` becomes stale.
 
 For all non-legacy paths, the `MILESTONE_DIR` for downstream substitution is `.gsd/milestones/$RUN_ID/` (if kind=milestone) or null (if kind=task). Where bash blocks below reference `{M###}`, substitute `$RUN_ID`. Workers receive `{M###}` resolved in their prompt header via the dispatch templates.
 
