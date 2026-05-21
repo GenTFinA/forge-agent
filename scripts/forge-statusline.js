@@ -97,16 +97,26 @@ process.stdin.on('end', () => {
     try {
       const runsDir = path.join(cwd, '.gsd', 'forge', 'runs');
       if (fs.existsSync(runsDir)) {
-        const STALE_MS = 5 * 60 * 1000;
+        // 15min matches the legacy single-run threshold (line ~159 below).
+        // 5min was too aggressive — opus planner thinking phases produce no
+        // mtime updates for 5-10min, causing the run to flap in/out of
+        // multiRunActive (statusline flicker between "AUTO ×2" and "AUTO").
+        const STALE_MS = 15 * 60 * 1000;
         const now = Date.now();
         const files = fs.readdirSync(runsDir).filter(f => f.endsWith('.json'));
+        const forgeDir = path.join(cwd, '.gsd', 'forge');
+        // Pre-scan evidence files once — readdir per-run is wasteful
+        let evidenceFiles = [];
+        try { evidenceFiles = fs.readdirSync(forgeDir).filter(f => /^evidence-.*\.jsonl$/.test(f)); }
+        catch {}
+
         for (const f of files) {
           try {
             const r = JSON.parse(fs.readFileSync(path.join(runsDir, f), 'utf8'));
             if (r.active !== true) continue;
             // M005+: smart stale heuristic. runs/{id}.json.last_heartbeat may be
             // stale due to session_id mismatch (pre-v1.13.3 bug); cross-reference
-            // M###-events.jsonl and M###-STATE.md mtime — most-recent signal wins.
+            // multiple per-run signals — most-recent wins.
             let age = now - (r.last_heartbeat || 0);
             if (r.milestone_dir) {
               for (const sub of [`${r.id}-events.jsonl`, `${r.id}-STATE.md`]) {
@@ -115,6 +125,14 @@ process.stdin.on('end', () => {
                   if (sigAge < age) age = sigAge;
                 } catch {}
               }
+            }
+            // M005.3+: evidence files (hook-written per tool call, very fresh signal)
+            for (const ef of evidenceFiles) {
+              if (!ef.includes(`-${r.id}-`)) continue;
+              try {
+                const sigAge = now - fs.statSync(path.join(forgeDir, ef)).mtimeMs;
+                if (sigAge < age) age = sigAge;
+              } catch {}
             }
             if (age > STALE_MS) continue;
             multiRunActive.push({

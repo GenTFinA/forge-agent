@@ -25,13 +25,13 @@ const runs = require('./forge-runs.js');
 const lock = require('./forge-lock.js');
 const forgeState = require('./forge-state.js');
 
-const STALE_WARNING_MS = 3  * 60 * 1000;  // yellow chip
-const STALE_MS         = 5  * 60 * 1000;  // red chip / "stale" label
+const STALE_WARNING_MS = 5  * 60 * 1000;  // yellow chip
+const STALE_MS         = 15 * 60 * 1000;  // red chip / "stale" label (M005.3+: 15min matches statusline)
 
 // Compute effective heartbeat age from multiple sources (M005+).
 // Some bugs leave runs/{id}.json.last_heartbeat stale (e.g. session_id mismatch
-// pre-v1.13.3), but the worker is still alive — events.jsonl and STATE.md mtime
-// reveal that. Use the MOST RECENT signal as ground truth.
+// pre-v1.13.3), but the worker is still alive — events.jsonl, STATE.md mtime
+// and per-run evidence files reveal that. Use the MOST RECENT signal as truth.
 function effectiveHeartbeatAge(r, now, cwd) {
   let minAge = now - (r.last_heartbeat || 0);
   if (r.milestone_dir) {
@@ -46,6 +46,19 @@ function effectiveHeartbeatAge(r, now, cwd) {
       } catch {}
     }
   }
+  // M005.3+: per-run evidence files (hook-writes a line per tool call —
+  // freshest per-run signal available; bypasses opus-thinking gaps where
+  // no other mtime updates for 5-10min).
+  try {
+    const forgeDir = path.join(cwd, '.gsd', 'forge');
+    for (const ef of fs.readdirSync(forgeDir)) {
+      if (!/^evidence-.*\.jsonl$/.test(ef) || !ef.includes(`-${r.id}-`)) continue;
+      try {
+        const age = now - fs.statSync(path.join(forgeDir, ef)).mtimeMs;
+        if (age < minAge) minAge = age;
+      } catch {}
+    }
+  } catch {}
   return minAge;
 }
 
