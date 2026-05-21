@@ -38,21 +38,45 @@ function sanitizeRunId(id) {
   return String(id || 'adhoc').replace(/[^\w.\-]/g, '_');
 }
 
+// Resolve the run owning this hook fire. Multi-run safe.
+//
+// Strategy (v1.14.1+):
+//   1. Direct session_id match against runs/*.json — best case
+//   2. Single-active-run heal: if no match but exactly 1 active run exists,
+//      claim it by updating its session_id to ours. The skill activation
+//      seeds session_id with a random hex fallback (CLAUDE_SESSION_ID env
+//      var isn't reliably set) so the FIRST hook fire of a session always
+//      mismatches — this self-heals on that first fire.
+//   3. Multi-active no-match: ambiguous, can't disambiguate without
+//      session_id correlation. Return null and let caller fall back.
+//
+// Returns the resolved run record, or null when no resolution possible.
+const resolveRunForSession = (cwd, sessionId) => {
+  if (!runs || !sessionId) return null;
+  try {
+    const direct = runs.resolveBySessionId(cwd, sessionId);
+    if (direct) return direct;
+    const active = runs.listActive(cwd);
+    if (active.length === 1) {
+      // Heal: claim the lone active run with this session_id
+      runs.update(cwd, active[0].id, { session_id: sessionId });
+      return Object.assign({}, active[0], { session_id: sessionId });
+    }
+  } catch { /* fall through to null */ }
+  return null;
+};
+
 // Bump last_heartbeat on the run owning this session.
-// Multi-run path (M004): resolves run by session_id, updates runs/{id}.json via forge-runs.js
+// Multi-run path (M004+): resolves run, updates runs/{id}.json via forge-runs.js
 // (which auto-refreshes the legacy auto-mode.json alias).
 // Legacy fallback: writes directly to auto-mode.json (pre-M004 workspaces without runs/).
 const bumpHeartbeat = (cwd, sessionId) => {
-  if (runs && sessionId) {
-    try {
-      const r = runs.resolveBySessionId(cwd, sessionId);
-      if (r) {
-        runs.bumpHeartbeat(cwd, r.id);
-        return;
-      }
-    } catch { /* fall through */ }
+  const r = resolveRunForSession(cwd, sessionId);
+  if (r) {
+    try { runs.bumpHeartbeat(cwd, r.id); return; }
+    catch { /* fall through to legacy */ }
   }
-  // Legacy: pre-M004 single-run, no runs/ directory or no session match
+  // Legacy: pre-M004 single-run, no runs/ directory or no session match (+ multi-active)
   try {
     const autoFile = path.join(cwd, '.gsd', 'forge', 'auto-mode.json');
     const auto = JSON.parse(fs.readFileSync(autoFile, 'utf8'));
@@ -67,14 +91,10 @@ const bumpHeartbeat = (cwd, sessionId) => {
 // Multi-run path: { runId, unitId, kind } from run.worker via session_id resolution.
 // Legacy fallback: { runId: null, unitId, kind: null } from auto-mode.json worker.
 const resolveUnitContext = (cwd, sessionId) => {
-  if (runs && sessionId) {
-    try {
-      const r = runs.resolveBySessionId(cwd, sessionId);
-      if (r) {
-        const unit = (r.worker || '').split('/')[1] || 'adhoc';
-        return { runId: r.id, unitId: unit, kind: r.kind };
-      }
-    } catch { /* fall through */ }
+  const r = resolveRunForSession(cwd, sessionId);
+  if (r) {
+    const unit = (r.worker || '').split('/')[1] || 'adhoc';
+    return { runId: r.id, unitId: unit, kind: r.kind };
   }
   try {
     const autoFile = path.join(cwd, '.gsd', 'forge', 'auto-mode.json');
@@ -212,15 +232,11 @@ process.stdin.on('end', () => {
       let runId = null;
       let worker = null;
 
-      if (runs && sessionId) {
-        try {
-          const r = runs.resolveBySessionId(cwd, sessionId);
-          if (r && r.active === true) {
-            recoverySignal = true;
-            runId = r.id;
-            worker = r.worker;
-          }
-        } catch { /* fall through */ }
+      const r = resolveRunForSession(cwd, sessionId);
+      if (r && r.active === true) {
+        recoverySignal = true;
+        runId = r.id;
+        worker = r.worker;
       }
 
       if (!recoverySignal) {
@@ -323,9 +339,8 @@ process.stdin.on('end', () => {
         const filePath = toolInput.file_path || '';
         if (filePath && readFileLocksEnabled(cwd)) {
           try {
-            const r = runs.resolveBySessionId(cwd, sessionId);
+            const r = resolveRunForSession(cwd, sessionId);
             if (r && r.active) {
-              // Compute relative path for the lock key
               const rel = path.isAbsolute(filePath) ? path.relative(cwd, filePath) : filePath;
               const result = filelock.acquireFileLock(cwd, rel, r.id, sessionId, { intent: toolName.toLowerCase() });
               if (!result.acquired) {
