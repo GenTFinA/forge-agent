@@ -211,8 +211,15 @@ Flags:
     --next-action <text>      required
     --auto-mode <on|off>      default off
     --isolation-mode <m>      default shared
-  --update <M###>           update fields
-    --json '{"phase":"...","task":"T03"}'
+    --slice <S##>             optional active_slice
+    --task <T##>              optional active_task
+  --update <M###>           update fields (accepts convenience flags OR --json)
+    --phase <phase>           shortcut for {phase: ...}
+    --slice <S##>             shortcut for {active_slice: ...}
+    --task <T##>              shortcut for {active_task: ...}
+    --next-action <text>      shortcut for {next_action: ...}
+    --auto-mode <on|off>      shortcut for {auto_mode: ...}
+    --json '{"phase":"...","active_task":"T03"}'  (overrides above on key collision)
   --push-recent <M###>      push to Recent units
     --entry '<text>'
   --read-legacy             print parsed legacy .gsd/STATE.md
@@ -234,10 +241,20 @@ Flags:
         auto_mode: args['auto-mode'] || 'off',
         isolation_mode: args['isolation-mode'] || 'shared',
       };
+      // M005.2+: convenience flags also work on --create
+      if (args.slice) state.active_slice = args.slice;
+      if (args.task)  state.active_task  = args.task;
       const file = write(cwd, state);
       process.stdout.write(file + '\n');
     } else if (args.update) {
-      const patch = args.json ? JSON.parse(args.json) : {};
+      // M005.2+: build patch from convenience flags AND --json (json takes precedence on collision)
+      const patch = {};
+      if (args.phase)        patch.phase        = args.phase;
+      if (args.slice)        patch.active_slice = args.slice;
+      if (args.task)         patch.active_task  = args.task;
+      if (args['next-action']) patch.next_action = args['next-action'];
+      if (args['auto-mode']) patch.auto_mode    = args['auto-mode'];
+      if (args.json) Object.assign(patch, JSON.parse(args.json));
       const r = updateFields(cwd, args.update, patch);
       process.stdout.write(JSON.stringify(r, null, 2) + '\n');
     } else if (args['push-recent']) {
