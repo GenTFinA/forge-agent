@@ -149,6 +149,35 @@ For all non-legacy paths, the `MILESTONE_DIR` for downstream substitution is `.g
 node "$FORGE_SCRIPTS_DIR/forge-dashboard.js" --cwd "$WORKING_DIR" --holder "auto:$RUN_ID" > /dev/null || true
 ```
 
+**Bootstrap + re-load per-milestone STATE (M004+, CRITICAL — must run before dispatch loop):**
+
+The initial `## Load context` step above read `.gsd/STATE.md`, which is now a dashboard (auto-generated, no Active Slice/Task/Phase fields). The orchestrator needs the per-milestone STATE to derive the next unit. Bootstrap if absent (brand-new milestone), then re-load:
+
+```bash
+if [ -n "$RUN_ID" ] && [ "$RUN_KIND" = "milestone" ]; then
+  PER_MILESTONE_STATE=".gsd/milestones/$RUN_ID/$RUN_ID-STATE.md"
+  if [ ! -f "$PER_MILESTONE_STATE" ]; then
+    # Brand-new milestone: no STATE file. Bootstrap with plan-milestone phase
+    # so the dispatch loop knows what to do first.
+    mkdir -p ".gsd/milestones/$RUN_ID"
+    node "$FORGE_SCRIPTS_DIR/forge-state.js" --create "$RUN_ID" \
+      --phase plan-milestone \
+      --next-action "Plan milestone $RUN_ID — decompose into slices via forge-planner" \
+      --auto-mode on \
+      --isolation-mode "${ISOLATION_MODE:-shared}" \
+      --cwd "$WORKING_DIR" > /dev/null
+    echo "→ Bootstrapped $PER_MILESTONE_STATE (plan-milestone phase)"
+  fi
+  # Override the STATE variable from Load context with per-milestone content.
+  # This is the source of truth for `## Dispatch Loop` to derive next_unit.
+  STATE=$(cat "$PER_MILESTONE_STATE")
+fi
+```
+
+For `RUN_KIND=task` runs, STATE is not file-backed (tasks live in `runs/{id}.json` directly per D-M004-12) — `/forge-task` is the canonical entry for those; this skill only handles milestones.
+
+For legacy mode (`STATUS=legacy`, `RUN_ID=""`), STATE was already loaded from `.gsd/STATE.md` in the original format — no override needed.
+
 ### Activate auto-mode indicator (legacy single-run alias)
 
 Write marker so the status line shows `▶ AUTO`. With M004+, `forge-runs.js` already does this via its auto-refresh-legacy-alias side effect — but writing here explicitly is safe (forge-runs `oldestActive` will pick the same record):
