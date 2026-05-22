@@ -1,3 +1,17 @@
+## v1.16.0 (2026-05-22) — forge-sweep skill
+
+New maintenance skill, promoted from a project-local draft used in production (WDMA / custody-transfer).
+
+### Added
+
+- **`forge-sweep` skill (`skills/forge-sweep/SKILL.md`):** prunes ephemeral GSD know-how files per a single-source-of-truth team policy — drops low-value `AUTO-MEMORY` entries (keeps `confidence >= 0.90 AND hits >= 2 AND` cross-cutting), drops `DECISIONS` rows that aren't architectural invariants, trims completed milestone/task directories **in place** (keeps only `*-SUMMARY.md`, requires a matching `LEDGER.md` entry as a safety gate), and removes closed `ask-*` sessions. Default run is a **dry-run preview**; `--apply` executes after an `AskUserQuestion` confirmation (`--force` skips it). `--scope task|milestone` narrows the sweep. `disable-model-invocation: true` — destructive, so never auto-invoked. Picked up automatically by both installers (skill-directory auto-discovery — no `install.sh`/`install.ps1` change needed). Goal: keep shared `.gsd/` files lean and merge-conflict-free for teams on SVN/Git.
+
+### Docs
+
+- `forge-help` and `README.md` skill tables now list `forge-sweep` under maintenance skills.
+
+---
+
 ## v1.14.0 (2026-05-21) — M005 Multi-Run Cleanup
 
 Polish + correctness fixes for issues discovered during the first real multi-run in production (M067 + M068 simultaneous in WHATSAPP OMNICHANNEL WORKSPACE). All changes are 100% additive — no breaking changes for single-run workspaces.

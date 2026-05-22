@@ -102,6 +102,7 @@ REPL interativo com menu. Acesso a todas as funcionalidades sem memorizar comand
 |-------|-----------|
 | `forge-doctor [--fix] [--dry-run]` | Diagnóstico do projeto — valida STATE, checkboxes, arquivos. `--fix` corrige automaticamente. |
 | `forge-codebase [--fix] [--dry-run] [--paths a,b]` | Qualidade do codebase — estrutura, lint, nomenclatura. `--fix` corrige o que for seguro. |
+| `forge-sweep [--apply] [--force] [--scope task\|milestone]` | Limpa know-how (`AUTO-MEMORY`, `DECISIONS`, milestones, sessões) por política de equipe. Sem args = dry-run; `--apply` executa. |
 
 ---
 

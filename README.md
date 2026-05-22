@@ -86,6 +86,7 @@ A partir da v1.0, o Forge Agent usa **3 comandos slash** e **skills** para tudo 
 | `forge-status` | Dashboard de progresso — milestone, slices, próxima ação |
 | `forge-doctor [--fix]` | Diagnóstico do projeto — valida e corrige STATE, arquivos, prefs |
 | `forge-codebase [--fix]` | Qualidade do codebase — lint, nomenclatura, estrutura |
+| `forge-sweep [--apply]` | Limpa know-how (AUTO-MEMORY, DECISIONS, milestones, sessões) — dry-run por padrão |
 | `forge-explain <alvo>` | Explica qualquer artefato GSD sem modificar nada |
 | `forge-memories` | Gerencia memórias auto-aprendidas do projeto |
 | `forge-ask` | Modo conversa — discute ideias, captura decisões |
