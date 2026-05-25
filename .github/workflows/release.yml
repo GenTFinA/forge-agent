@@ -9,6 +9,12 @@ on:
 permissions:
   contents: write
 
+# Serialize runs so near-simultaneous pushes (e.g. a batch of merges) don't
+# race on the same computed version. Queue, don't cancel -- every push releases.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -135,6 +141,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           NEW_TAG="${{ steps.version.outputs.new_tag }}"
+          # Idempotent: if the release already exists (e.g. a tag-push re-trigger,
+          # or a re-run), skip instead of failing with HTTP 422.
+          if gh release view "$NEW_TAG" >/dev/null 2>&1; then
+            echo "Release $NEW_TAG already exists -- skipping."
+            exit 0
+          fi
           # If tag doesn't exist yet (auto-bump case), gh release create will create it.
           # If tag already exists (manual tag case), --verify-tag ensures we use it as-is.
           if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
@@ -143,8 +155,10 @@ jobs:
               --notes-file /tmp/changelog.md \
               --verify-tag
           else
+            # Pin the tag to the exact commit that triggered this run -- NOT wherever
+            # master happens to point now (which races when pushes land back-to-back).
             gh release create "$NEW_TAG" \
               --title "$NEW_TAG" \
               --notes-file /tmp/changelog.md \
-              --target master
+              --target "$GITHUB_SHA"
           fi
