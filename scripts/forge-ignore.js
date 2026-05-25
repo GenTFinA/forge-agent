@@ -3,6 +3,7 @@
 //
 // Library exports:
 //   LOCAL_IGNORE_PATHS        // Object.freeze([...]) — canonical Layer-1 paths
+//   PROJECTION_IGNORE_PATHS   // Object.freeze([...]) — projection monoliths derived from fragment stores
 //   detectVcs(cwd)            // (cwd) → 'git' | 'svn' | 'none'
 //   applyIgnore(cwd)          // (cwd) → { vcs, added: string[], skipped: string[] }
 //   validateIgnore(cwd)       // (cwd) → { vcs, missing: string[], ok: boolean }
@@ -37,6 +38,20 @@ const LOCAL_IGNORE_PATHS = Object.freeze([
   '.gsd/forge/evidence-*.jsonl',
   '.gsd/forge/compact-signal.json',
 ]);
+
+// ── PROJECTION_IGNORE_PATHS ───────────────────────────────────────────────────
+// Derived monoliths regenerated on-read from fragment stores.
+// The fragment file is the source of truth (e.g. .gsd/ledger/<id>.md);
+// the monolith is a projection rebuilt by S05's read layer.
+// S03 will add '.gsd/DECISIONS.md'; S04 will add '.gsd/AUTO-MEMORY.md'.
+const PROJECTION_IGNORE_PATHS = Object.freeze([
+  '.gsd/LEDGER.md',
+]);
+
+// Internal: union of all ignored paths (LOCAL + PROJECTION).
+function allIgnorePaths() {
+  return [...LOCAL_IGNORE_PATHS, ...PROJECTION_IGNORE_PATHS];
+}
 
 // ── detectVcs ─────────────────────────────────────────────────────────────────
 // Checks cwd only — does NOT walk up to parent dirs.
@@ -112,7 +127,7 @@ function applyIgnore(cwd) {
     const skipped = [];
     const toAppend = [];
 
-    for (const p of LOCAL_IGNORE_PATHS) {
+    for (const p of allIgnorePaths()) {
       if (existingSet.has(p)) {
         skipped.push(p);
       } else {
@@ -135,7 +150,7 @@ function applyIgnore(cwd) {
   }
 
   if (vcs === 'svn') {
-    const groups = groupByParentDir(LOCAL_IGNORE_PATHS);
+    const groups = groupByParentDir(allIgnorePaths());
     const added = [];
     const skipped = [];
 
@@ -173,7 +188,7 @@ function applyIgnore(cwd) {
   }
 
   // vcs === 'none'
-  return { vcs: 'none', added: [], skipped: [...LOCAL_IGNORE_PATHS] };
+  return { vcs: 'none', added: [], skipped: allIgnorePaths() };
 }
 
 // ── validateIgnore ────────────────────────────────────────────────────────────
@@ -185,12 +200,12 @@ function validateIgnore(cwd) {
     const gitignorePath = path.join(dir, '.gitignore');
     const lines = readGitignoreLines(gitignorePath);
     const existingSet = new Set(lines.map(l => l.trim()));
-    const missing = LOCAL_IGNORE_PATHS.filter(p => !existingSet.has(p));
+    const missing = allIgnorePaths().filter(p => !existingSet.has(p));
     return { vcs: 'git', missing, ok: missing.length === 0 };
   }
 
   if (vcs === 'svn') {
-    const groups = groupByParentDir(LOCAL_IGNORE_PATHS);
+    const groups = groupByParentDir(allIgnorePaths());
     const missing = [];
 
     for (const [parentDir, basenames] of groups) {
@@ -215,6 +230,7 @@ function validateIgnore(cwd) {
 // ── module.exports ─────────────────────────────────────────────────────────────
 module.exports = {
   LOCAL_IGNORE_PATHS,
+  PROJECTION_IGNORE_PATHS,
   detectVcs,
   applyIgnore,
   validateIgnore,
@@ -222,6 +238,7 @@ module.exports = {
 
 // ── CLI ────────────────────────────────────────────────────────────────────────
 // Guarded by require.main === module — importing this file does NOT trigger output.
+// Both LOCAL_IGNORE_PATHS and PROJECTION_IGNORE_PATHS are used by --apply/--validate/--list-paths.
 function parseArgs(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i++) {
@@ -243,7 +260,7 @@ function cliMain() {
 
 Flags:
   --detect-vcs [--cwd <dir>]   print 'git', 'svn', or 'none' for the repo at <dir>
-  --list-paths                 print canonical LOCAL_IGNORE_PATHS (one per line)
+  --list-paths                 print LOCAL_IGNORE_PATHS and PROJECTION_IGNORE_PATHS (sectioned)
   --apply [--cwd <dir>]        add missing ignore rules to .gitignore or svn:ignore
   --validate [--cwd <dir>]     check all canonical paths are ignored; exit 1 if not
   --cwd <dir>                  working directory (default: process.cwd())
@@ -264,7 +281,10 @@ Exit codes:
       process.stdout.write(detectVcs(cwdArg) + '\n');
 
     } else if ('list-paths' in args) {
-      process.stdout.write(LOCAL_IGNORE_PATHS.join('\n') + '\n');
+      process.stdout.write('LOCAL_IGNORE_PATHS:\n');
+      process.stdout.write(LOCAL_IGNORE_PATHS.map(p => `  ${p}`).join('\n') + '\n');
+      process.stdout.write('PROJECTION_IGNORE_PATHS:\n');
+      process.stdout.write(PROJECTION_IGNORE_PATHS.map(p => `  ${p}`).join('\n') + '\n');
 
     } else if ('apply' in args) {
       const result = applyIgnore(cwdArg);
