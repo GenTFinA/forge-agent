@@ -864,9 +864,25 @@ Each entry must be a single line. This is the orchestrator-side record; workers 
 
 **b) Update per-milestone STATE** — advance to next unit position via `scripts/forge-state.js --update {M###} --json '{...}'`. The global `.gsd/STATE.md` dashboard is regenerated separately via `scripts/forge-dashboard.js` (called on boot/exit/phase-change per `multi_run.dashboard_refresh_on` pref).
 
-**c) Append decisions** — if `key_decisions` in result, append to per-milestone `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-DECISIONS.md` (M004+). The global `.gsd/DECISIONS.md` is merged on `complete-milestone` via `scripts/forge-merger.js` (S05) under `.gsd/.locks/DECISIONS.md/`. Use **`Edit`** for an existing per-milestone file (anchor on last row); use `Write` once if the file does not yet exist (header + first row). Bash alternative: `cat >> path << 'EOF'`.
+**c) Append decisions** — if `key_decisions` in result, write to the fragment store via `forge-decisions.js --write` (stdin JSON):
 
-**Legacy:** if `{M###}` not resolved, append to `.gsd/DECISIONS.md` global direct (pre-M004 behavior).
+<!-- pre-S03: this used to Edit/cat >> {M###}-DECISIONS.md or .gsd/DECISIONS.md directly -->
+
+Partition rule:
+- Milestone-bound task (T## inside a slice, `{M###}` is set) → `unit_id = {M###}`
+- Loose `/forge-task` run (no milestone, `{task-id}` is set) → `unit_id = {task-id}`
+
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+DECISIONS_UNIT_ID="${M###:-${task_id:-}}"
+if [ -n "$DECISIONS_UNIT_ID" ]; then
+  printf '%s' "$key_decisions_json" | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "$WORKING_DIR"
+else
+  echo "[forge-auto] WARNING: no unit_id for decisions — skipping fragment write" >&2
+fi
+```
+
+Where `key_decisions_json` is a JSON object `{ "unit_id": "$DECISIONS_UNIT_ID", "decisions": [...] }` built from the `key_decisions` field of the worker result. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-merger, S05). Do NOT write directly to `.gsd/DECISIONS.md` or any `M###-DECISIONS.md` file.
 
 **d) Memory extraction** — dispatch `forge-memory` agent **in the background** (`run_in_background: true`) so the orchestrator can immediately dispatch the next unit without waiting for memory extraction to finish. Rationale: memory extraction averages 20–40s, runs on Haiku (cheap + fast), and the extracted memories only affect the *next* selective injection — not the current dispatch decision. Running it in parallel with the next unit is the single highest-leverage parallelism win (one extraction per unit, every unit).
 

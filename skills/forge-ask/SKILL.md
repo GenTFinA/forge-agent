@@ -185,7 +185,7 @@ Arquivo da sessão: .gsd/sessions/{session-id}.md
 
 Comandos durante a conversa:
   "brainstorm: X"       → explora abordagens, riscos e escopo de X
-  "salvar decisão: X"   → registra X no DECISIONS.md
+  "salvar decisão: X"   → registra X em .gsd/decisions/ask-{session-id}.md
   "criar milestone: X"  → gera /forge-new-milestone com contexto desta sessão
   "criar task: X"       → instrução para /forge-add-task
   "encerrar sessão"     → fecha e arquiva esta sessão
@@ -228,8 +228,15 @@ Write the updated file.
 ### B. Check for special commands
 
 If user said **"salvar decisão: [text]"**:
-- Append to `.gsd/DECISIONS.md` using **`Edit` only** — never `Write` (replaces whole file; PreToolUse hook blocks `Write` here). `Read` the file in full first (paginate if large), then `Edit` with `old_string` = current last row and `new_string` = that row + newline + your new row. Bash alternative: `cat >> .gsd/DECISIONS.md << 'EOF'` (never `>`).
-- Confirm: "✓ Decisão salva no DECISIONS.md"
+- Determine the active session ID from the current session file (frontmatter `id` field — e.g. `ask-2026-05-22-1430`). Use it as `unit_id` prefixed with `ask-` (e.g. `ask-ask-2026-05-22-1430` if the id already starts with `ask-`, otherwise `ask-{id}`). The fragment lands in `.gsd/decisions/ask-{session-id}.md`.
+- <!-- pre-S03: this used to Edit/cat >> .gsd/DECISIONS.md directly -->
+- Invoke via Bash (sidesteps the PreToolUse Write-block since the script does the write):
+  ```bash
+  FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+  SESSION_ID="{session-id}"   # from the active session frontmatter
+  echo '{"unit_id":"ask-'"$SESSION_ID"'","decisions":[{"when":"'"$(date +%Y-%m-%d)"'","scope":"ask","decision":"[text from user]","choice":"","rationale":"","revisable":"yes"}]}' | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "$(pwd)"
+  ```
+- Confirm: "✓ Decisão salva em `.gsd/decisions/ask-{session-id}.md`"
 
 If user said **"brainstorm: [topic]"** or **"brainstorming: [topic]"**:
 - Invoke: `Skill({ skill: "forge-brainstorm", args: "[topic]" })`

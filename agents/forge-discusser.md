@@ -119,18 +119,32 @@ Write `M###-CONTEXT.md` or `S##-CONTEXT.md`:
 
 Call `ExitPlanMode`. The CONTEXT file above is your plan — the user will review and approve it before planning begins. After the user approves, continue to Step 5.
 
-### Step 5 — Append significant decisions to per-milestone `M###-DECISIONS.md`
+### Step 5 — Append significant decisions to the fragment store
 
-**Multi-run (M004+):** decisions go to `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-DECISIONS.md` (per-milestone). The global `.gsd/DECISIONS.md` is merged on `complete-milestone` (forge-completer step 5) under lockfile. This eliminates cross-run write contention.
+<!-- pre-S03: this used to append to .gsd/DECISIONS.md or {M###}-DECISIONS.md via Edit/cat >> -->
 
-**Use `Edit` (or `cat >>`) — never `Write` that file from scratch.** Procedure:
+For each significant decision made during this discuss unit, pipe a JSON fragment to `forge-decisions.js --write`:
 
-1. `Read` the per-milestone file if it exists (`{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-DECISIONS.md`).
-   - If the file does NOT exist: use `Write` once to create it with the header row + your decision(s). Subsequent appends use `Edit`.
-2. `mkdir -p {WORKING_DIR}/.gsd/milestones/{M###}/` first (safe if exists).
-3. For an existing file: `Edit` with `old_string` = the current last table row (exact whitespace) and `new_string` = that row + newline + your new row(s).
-4. Bash alternative: `cat >> {WORKING_DIR}/.gsd/milestones/{M###}/{M###}-DECISIONS.md << 'EOF' … EOF` — never `>` (which truncates).
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+echo '{
+  "unit_id": "{M###}",
+  "decisions": [
+    {
+      "when": "YYYY-MM-DD",
+      "scope": "milestone|slice",
+      "decision": "Short label for this decision",
+      "choice": "What was chosen",
+      "rationale": "Why this was chosen",
+      "revisable": "yes|no"
+    }
+  ]
+}' | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "{WORKING_DIR}"
+```
 
-**Legacy fallback:** if `{M###}` is not provided in the prompt (legacy single-run invocation), write to `.gsd/DECISIONS.md` direct as before. The orchestrator from M004+ always sets `{M###}`.
+- `unit_id` is the milestone ID (e.g. `M001`, `M-20260522101500-pagamentos`). The CLI validates the ID and writes to `.gsd/decisions/<unit-id>.md`.
+- Multiple decisions can be included in the `decisions` array in a single invocation.
+- Do NOT append directly to `.gsd/DECISIONS.md` or any `M###-DECISIONS.md` file — the CLI is the uniform write path. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-completer, step 5).
+- **Legacy fallback:** if `{M###}` is not provided in the prompt, use an empty string as `unit_id` — the CLI will error and the orchestrator will surface it. Do NOT fall back to direct file edits.
 
 Then return the `---GSD-WORKER-RESULT---` block.

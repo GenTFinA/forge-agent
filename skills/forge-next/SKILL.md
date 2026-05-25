@@ -449,7 +449,25 @@ Each entry must be a single line. Append-only is atomic up to PIPE_BUF — event
 
 **b) Update per-milestone STATE** — advance to next unit position via `scripts/forge-state.js --update {M###} --json '{...}'`. Dashboard regen happens separately via `scripts/forge-dashboard.js`.
 
-**c) Append decisions** — if `key_decisions` in result, append to per-milestone `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-DECISIONS.md` (M004+). Global `.gsd/DECISIONS.md` merged on `complete-milestone` via merger (S05). `Edit` for existing file; `Write` once if missing; or `cat >> path << 'EOF'`. Legacy fallback: global path direct if `{M###}` not resolved.
+**c) Append decisions** — if `key_decisions` in result, write to the fragment store via `forge-decisions.js --write` (stdin JSON):
+
+<!-- pre-S03: this used to Edit/cat >> {M###}-DECISIONS.md or .gsd/DECISIONS.md directly -->
+
+Partition rule:
+- Milestone-bound task (T## inside a slice, `{M###}` is set) → `unit_id = {M###}`
+- Loose `/forge-task` run (no milestone, `{task-id}` is set) → `unit_id = {task-id}`
+
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+DECISIONS_UNIT_ID="${M###:-${task_id:-}}"
+if [ -n "$DECISIONS_UNIT_ID" ]; then
+  printf '%s' "$key_decisions_json" | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "$WORKING_DIR"
+else
+  echo "[forge-next] WARNING: no unit_id for decisions — skipping fragment write" >&2
+fi
+```
+
+Where `key_decisions_json` is a JSON object `{ "unit_id": "$DECISIONS_UNIT_ID", "decisions": [...] }` built from the `key_decisions` field of the worker result. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-merger, S05). Do NOT write directly to `.gsd/DECISIONS.md` or any `M###-DECISIONS.md` file.
 
 **d) Memory extraction** — call `forge-memory` agent (blocking — await before continuing):
 

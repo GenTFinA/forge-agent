@@ -34,6 +34,9 @@ function safeRead(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return
 function safeReadJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 
 // ── DECISIONS.md merger ─────────────────────────────────────────────────────
+// @deprecated as of M001/S03 — fragment store; retained for backward compatibility.
+// DECISIONS are now written via forge-decisions.js --write to .gsd/decisions/<unit-id>.md.
+// Do not invoke mergeDecisions from mergeMilestone — that task entry was removed.
 // Global format: markdown table with header `| ID | Decision | Rationale | Date |`
 // followed by body rows. We append all rows from per-milestone file's body to global,
 // sorted by Date column (col 4) ascending. Idempotent: rows with matching ID are not duplicated.
@@ -381,14 +384,14 @@ async function mergeMilestone(cwd, milestoneId, opts) {
   const result = { merged: { decisions: 0, memories: 0, checker: 0, events: 0 }, errors: [] };
 
   const sources = {
-    decisions: perMilestonePath(cwd, milestoneId, 'DECISIONS.md'),
+    // decisions removed — fragment store (.gsd/decisions/<unit-id>.md) is now source of truth (M001/S03)
     memories:  perMilestonePath(cwd, milestoneId, 'AUTO-MEMORY.md'),
     checker:   perMilestonePath(cwd, milestoneId, 'CHECKER-MEMORY.md'),
     events:    perMilestonePath(cwd, milestoneId, 'events.jsonl'),
   };
 
   const tasks = [
-    { name: 'DECISIONS.md',      run: () => mergeDecisions(cwd, sources.decisions),     resultKey: 'decisions', getCount: r => r.merged },
+    // DECISIONS.md task removed — decisions are now in fragment store; global rebuild happens in complete-milestone (S05)
     { name: 'AUTO-MEMORY.md',    run: () => mergeAutoMemory(cwd, sources.memories),     resultKey: 'memories',  getCount: r => r.merged },
     { name: 'CHECKER-MEMORY.md', run: () => mergeCheckerMemory(cwd, sources.checker),   resultKey: 'checker',   getCount: r => r.merged },
     { name: 'events.jsonl',      run: () => mergeEvents(cwd, sources.events),           resultKey: 'events',    getCount: r => r.merged },
