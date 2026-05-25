@@ -279,6 +279,12 @@ function mergeLedger(cwd, sourcePath) {
 }
 
 // ── CHECKER-MEMORY.md merger ────────────────────────────────────────────────
+/**
+ * @deprecated S04 — checker is now a fragment store. Kept for back-compat with stale callers.
+ * Checker events are written by forge-checker-memory.js --write (complete-slice step 1.9).
+ * The fragment store (.gsd/checker-memory/) is the source of truth; .gsd/CHECKER-MEMORY.md
+ * is a projection. The tasks array in mergeMilestone no longer includes the 'checker' entry.
+ */
 // Format: two tables (Plan Quality Patterns, Verification Patterns) with
 // columns Dimension/Pattern | Severity | Count | Last Seen | ...
 // Merge by (table, key) → accumulate Count, take latest Last Seen.
@@ -386,14 +392,14 @@ async function mergeMilestone(cwd, milestoneId, opts) {
   const sources = {
     // decisions removed — fragment store (.gsd/decisions/<unit-id>.md) is now source of truth (M001/S03)
     memories:  perMilestonePath(cwd, milestoneId, 'AUTO-MEMORY.md'),
-    checker:   perMilestonePath(cwd, milestoneId, 'CHECKER-MEMORY.md'),
+    // checker removed — fragment store (.gsd/checker-memory/) is now source of truth (M001/S04)
     events:    perMilestonePath(cwd, milestoneId, 'events.jsonl'),
   };
 
   const tasks = [
     // DECISIONS.md task removed — decisions are now in fragment store; global rebuild happens in complete-milestone (S05)
+    // CHECKER-MEMORY.md task removed — checker is now a fragment store; see mergeCheckerMemory @deprecated (M001/S04)
     { name: 'AUTO-MEMORY.md',    run: () => mergeAutoMemory(cwd, sources.memories),     resultKey: 'memories',  getCount: r => r.merged },
-    { name: 'CHECKER-MEMORY.md', run: () => mergeCheckerMemory(cwd, sources.checker),   resultKey: 'checker',   getCount: r => r.merged },
     { name: 'events.jsonl',      run: () => mergeEvents(cwd, sources.events),           resultKey: 'events',    getCount: r => r.merged },
   ];
 
@@ -508,19 +514,21 @@ Flags:
   --holder <id>        tag lock holder for debugging
 
 Reads:
-  .gsd/milestones/M###/M###-DECISIONS.md
+  .gsd/milestones/M###/M###-DECISIONS.md   (@deprecated S03 — decisions fragment store is source of truth)
   .gsd/milestones/M###/M###-AUTO-MEMORY.md
-  .gsd/milestones/M###/M###-CHECKER-MEMORY.md
+  .gsd/milestones/M###/M###-CHECKER-MEMORY.md  (@deprecated S04 — checker fragment store is source of truth)
   .gsd/milestones/M###/M###-events.jsonl
 
 Writes (under .gsd/.locks/{name}/):
-  .gsd/DECISIONS.md (append)
+  .gsd/DECISIONS.md (append)   (@deprecated S03 — rebuilt from fragment store in complete-milestone)
   .gsd/AUTO-MEMORY.md (promote + cap-50)
-  .gsd/CHECKER-MEMORY.md (merge tables)
   .gsd/forge/events.jsonl (append)
 
 Note: LEDGER is handled by the fragment store (forge-ledger.js --write) in the completer
   step 5a. The merger no longer reads M###-LEDGER-ENTRY.md or writes LEDGER.md.
+Note: CHECKER-MEMORY is handled by the fragment store (forge-checker-memory.js --write) in
+  the completer step 1.9. The merger no longer merges M###-CHECKER-MEMORY.md or writes
+  CHECKER-MEMORY.md. mergeCheckerMemory() is kept @deprecated for back-compat.
 `);
     return;
   }
