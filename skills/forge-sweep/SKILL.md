@@ -1,6 +1,6 @@
 ---
 name: forge-sweep
-description: "Prune know-how files (AUTO-MEMORY, DECISIONS, milestones, sessions) per team policy. Default = dry-run preview. Use --apply to execute."
+description: "Prune know-how files (AUTO-MEMORY, CHECKER-MEMORY, DECISIONS, milestones, sessions) per team policy. Default = dry-run preview. Use --apply to execute."
 disable-model-invocation: true
 allowed-tools: Read, Write, Bash, Glob, AskUserQuestion
 ---
@@ -11,7 +11,7 @@ $ARGUMENTS
 
 ---
 
-Prune ephemeral GSD artifacts and tighten durable know-how files (AUTO-MEMORY, DECISIONS) at the end of a task or milestone. Goal: keep shared `.gsd/` files lean and long-lived; avoid SVN/Git merge conflicts.
+Prune ephemeral GSD artifacts and tighten durable know-how files (AUTO-MEMORY, CHECKER-MEMORY, DECISIONS) at the end of a task or milestone. Goal: keep shared `.gsd/` files lean and long-lived; avoid SVN/Git merge conflicts.
 
 Milestone and task directories are **trimmed in place** (preserving only the `*-SUMMARY.md` file) rather than removed entirely — the directory's continued presence in version control signals to the team that the milestone/task existed and was completed, avoiding the "where did M### go?" confusion when one teammate runs `/forge-sweep` and another pulls the result.
 
@@ -40,29 +40,53 @@ If any missing → tell user "Project not initialized — run /forge-init first"
 
 ## Sweep Policy (single source of truth)
 
-### AUTO-MEMORY entries
+### AUTO-MEMORY fragments
 
-Keep when **all** apply:
-- `confidence >= 0.90`
-- `hits >= 2`
-- description does NOT mention specific line numbers (`line N`, `lines N-M`) — those are codified in code, re-discoverable via blame
-- description does NOT name a single file path as the only context — single-file gotchas have low reuse value
+AUTO-MEMORY is now stored as per-unit fragments in `.gsd/memory/*.md` (S04 fragment store). The monolithic `.gsd/AUTO-MEMORY.md` is **no longer rewritten by this sweep** — all pruning operates via event emission.
 
-Otherwise → drop. Surface as **flag for human review** when confidence/hits pass but the description mentions a line number or single file (could still be valuable).
+Prune criteria — emit a `{kind: prune}` event for any fragment entry where:
+- `confidence < 0.90` OR `hits < 2`, OR
+- description mentions specific line numbers (`line N`, `lines N-M`) — those are codified in code, re-discoverable via blame, OR
+- description names a single file path as the only context — single-file gotchas have low reuse value
 
-### DECISIONS rows
+Otherwise → keep. Surface as **flag for human review** when confidence/hits pass but the description mentions a line number or single file (could still be valuable).
 
-Keep when the row describes a **cross-cutting architectural invariant**:
-- Extension point / config plug pattern (e.g., "use the per-X override mechanism")
-- Server-vs-client boundary, sync-vs-async boundary, or similar invariant
-- `Revisable: Não` is a strong signal (but not the only one)
+#### LEDGER guard — physical deletion rule
 
-Drop when the row describes:
-- A concrete UX behavior already implemented (button text, exact column list, persistence rules)
-- A specific bugfix call site (line N, file X)
-- A list of values (column names, dictionary keys) that's already in the source
+Emitting a `prune` event is a **logical prune** — the projection layer will exclude the entry from the active set.
 
-Surface as **flag for review** when ambiguous.
+**Physical fragment deletion** (`rm .gsd/memory/<unit-id>.md`) is performed ONLY when:
+1. Every memory inside the fragment has a corresponding `prune` event, AND
+2. The owning unit appears in `.gsd/LEDGER.md` (matched by unit ID in a heading line, e.g. `^## M-<ts>-<slug>` or `^## TASK-###`).
+
+Until both conditions are met, pruning is **event-only** — the fragment file stays on disk. This guarantees that an open or partially-evaluated unit never loses facts prematurely.
+
+### DECISIONS (no-op — fragments pending S05)
+
+<!-- DECISIONS are now fragments (S03 fragment store at .gsd/decisions/).
+     The legacy row-pruning policy that previously lived here is OBSOLETE —
+     kept as a no-op until S05 defines a fragment-level pruning policy.
+     This sweep step performs zero file mutations on DECISIONS. -->
+
+The DECISIONS sweep step is intentionally a no-op. No rows are dropped, no file is rewritten. During the preview and apply phases below, the DECISIONS section will always report `Keep: all rows (no-op — S05 pending)`.
+
+### CHECKER-MEMORY fragments
+
+CHECKER-MEMORY stores per-dimension check events in `.gsd/checker-memory/*.md` (one fragment per slice). The sweep applies a staleness-based prune policy in parallel to AUTO-MEMORY.
+
+Prune criteria — emit a `{kind: prune}` event for any checker-memory fragment entry where:
+- The entry is older than 3 completed milestones (projection-derived from `ts` + LEDGER order), AND
+- The `count` field for that dimension in that slice is `>= 5` (the legacy decay rule, now projection-derived from fragment events)
+
+Rationale: high-count old dimensions are either fixed (safe to drop) or systemic (will re-appear via new events — no value in the historical record).
+
+#### LEDGER guard (same rule as AUTO-MEMORY)
+
+Physical deletion of `.gsd/checker-memory/<slice-id>.md` only when:
+1. Every dimension record inside the fragment has a `prune` event, AND
+2. The owning slice's parent milestone appears in `.gsd/LEDGER.md`.
+
+Until both conditions hold, pruning is event-only.
 
 ### Milestone directories (`.gsd/milestones/M*/`)
 
@@ -99,31 +123,42 @@ Drop when frontmatter has `status: closed`. Keep `status: open` sessions untouch
 ### 1. Inventory
 
 In parallel:
+- `node scripts/forge-memory.js --list` (enumerate AUTO-MEMORY fragments)
+- `node scripts/forge-checker-memory.js --list` (enumerate CHECKER-MEMORY fragments)
 - `ls -d .gsd/milestones/M*/ 2>/dev/null`
 - `ls -d .gsd/tasks/TASK-*/ 2>/dev/null`
 - `ls .gsd/sessions/ 2>/dev/null`
-- Read `.gsd/AUTO-MEMORY.md`
-- Read `.gsd/DECISIONS.md`
 - Read `.gsd/LEDGER.md`
 
-For each milestone dir found, check whether `M###-SUMMARY.md` exists inside AND whether `LEDGER.md` contains a heading line matching `^## M###` (case-sensitive).
+For each AUTO-MEMORY fragment returned by `forge-memory.js --list` (format: `[{unitId, path}]`):
+- Read the fragment file.
+- Parse all `mem_id`, `confidence`, `hits`, and description text.
+- Apply the prune criteria (see Sweep Policy above).
 
-For each task dir found, check whether `TASK-###-SUMMARY.md` exists inside AND whether `LEDGER.md` contains a heading line matching `^## TASK-###` (case-sensitive).
+For each CHECKER-MEMORY fragment returned by `forge-checker-memory.js --list`:
+- Read the fragment file.
+- Parse each dimension entry: `dimension`, `slice`, `ts`, `count`.
+- Determine milestone age by cross-referencing `LEDGER.md` — compute how many completed milestones are newer than `ts`.
+- Apply the staleness-based prune criteria.
 
-For each session file, parse frontmatter to extract `status:`.
+For each milestone dir, check `M###-SUMMARY.md` and `LEDGER.md` heading.
+For each task dir, check `TASK-###-SUMMARY.md` and `LEDGER.md` heading.
+For each session file, parse frontmatter `status`.
 
 ### 2. Classify
 
-Walk each AUTO-MEMORY entry. The format is:
-```
-- [MEMxxx] (category) confidence:0.NN hits:N — text...
-```
+**AUTO-MEMORY classification** — for each fragment entry:
+- `prune` — below-threshold (confidence/hits) or single-file-ref
+- `keep` — passes all criteria
+- `review` — passes confidence/hits but mentions line numbers or single file path
 
-Extract `confidence`, `hits`, and the `text` portion. Apply the filter (see Sweep Policy).
+**CHECKER-MEMORY classification** — for each dimension record:
+- `prune` — older than 3 milestones AND count >= 5
+- `keep` — anything else
 
-Walk each DECISIONS table row (lines starting with `|` after the header separator). Apply the filter using the `Scope`, `Decision`, and `Revisable?` columns. Architectural invariants are typically `Não` revisable AND have a `Scope` containing words like "architecture", "extensibility", "boundary", "invariant" — but use judgment: a row whose `Decision` describes "where X plugs in" or "X is server-side" qualifies even without those keywords.
+**DECISIONS classification** — always `keep (no-op)`. No decisions are classified for pruning.
 
-When in doubt: classify as **flag for review** rather than auto-drop.
+When in doubt on AUTO-MEMORY: classify as **flag for review** rather than auto-drop.
 
 ### 3. Print preview
 
@@ -132,15 +167,19 @@ Always print the preview, regardless of mode:
 ```
 ## /forge-sweep preview {dry-run | apply}
 
-### AUTO-MEMORY
-  Keep:    N entries
-  Drop:    N entries  (each listed with [MEMxxx] one-liner)
+### AUTO-MEMORY (fragment store — event-based prune)
+  Keep:    N entries  (across M fragments)
+  Prune:   N entries  (each listed with [MEMxxx] one-liner + reason: below-threshold | single-file-ref)
   Review:  N entries  (each listed with WHY flagged: "mentions line 1115" / "single file scope")
+  Physical delete eligible: N fragments  (all entries pruned + LEDGER confirmed)
 
-### DECISIONS
-  Keep:    N rows
-  Drop:    N rows  (each: # | Scope | Decision one-liner)
-  Review:  N rows  (each: WHY flagged)
+### DECISIONS (no-op — S05 pending)
+  Keep: all rows (no-op — fragment-level pruning policy TBD in S05+)
+
+### CHECKER-MEMORY (fragment store — event-based prune)
+  Keep:    N dimension records  (across M fragments)
+  Prune:   N dimension records  (each listed with dimension + slice + reason: stale)
+  Physical delete eligible: N fragments  (all entries pruned + LEDGER confirmed)
 
 ### Milestone dirs
   Trim:    M001, M002, ...   (keep only M###-SUMMARY.md; drop intermediates)
@@ -165,7 +204,7 @@ Print: "Dry-run complete. To apply: /forge-sweep --apply"
 ### 5. If --apply (and not --force) → confirm
 
 Use AskUserQuestion with a single yes/no:
-- Question: "Apply the sweep above? Drops N memories + N decisions + N sessions; trims N milestone dirs + N task dirs (keeping only their SUMMARY). Cannot be undone except via version control."
+- Question: "Apply the sweep above? Emits N prune events (AUTO-MEMORY) + N prune events (CHECKER-MEMORY); physically deletes N eligible fragments; drops N sessions; trims N milestone dirs + N task dirs (keeping only their SUMMARY). Cannot be undone except via version control."
 - Options: ["Apply now", "Cancel"]
 
 If user picks Cancel → stop, no writes.
@@ -174,42 +213,75 @@ If user picks Cancel → stop, no writes.
 
 Order matters — do these in sequence:
 
-**a) AUTO-MEMORY rewrite**
-Build the new file content:
-- Keep the `<!-- gsd-auto-memory ... -->` header lines, but update the comment to add `| pruned: YYYY-MM-DD — kept K/N (criteria: confidence>=0.90 AND hits>=2 AND cross-cutting)`
-- Re-emit each kept entry verbatim
-- Group by category (`## Gotcha`, `## Convention`, `## Architecture`) preserving original ordering within each group
-Write back via Write tool.
+**a) AUTO-MEMORY prune events**
 
-**b) DECISIONS rewrite**
-Build new content:
-- Preserve the title and explanatory comment block; append a new comment line: `<!-- YYYY-MM-DD: Pruned K/N rows. Kept only cross-cutting architectural invariants. -->`
-- Re-emit the table header and the kept rows verbatim (preserve original `#` numbering — do NOT renumber)
-Write back via Write tool.
+For each entry classified as `prune`:
+```bash
+echo '{"kind":"prune","mem_id":"<mem_id>","ts":"<ISO8601>","reason":"<below-threshold|single-file-ref>"}' \
+  | node scripts/forge-memory.js --write --cwd .
+```
 
-**c) Milestone dirs**
+Do NOT rewrite `.gsd/AUTO-MEMORY.md`. Do NOT delete fragment files here (see physical deletion step below).
+
+**b) DECISIONS sweep — no-op**
+
+<!-- This step performs zero file mutations. DECISIONS are fragments (S03).
+     No rows are dropped. No file is rewritten. Prune policy TBD in S05+. -->
+Skip entirely. Log: "DECISIONS sweep skipped (no-op — S05 pending)".
+
+**c) CHECKER-MEMORY prune events**
+
+For each dimension record classified as `prune`:
+```bash
+echo '{"kind":"prune","dimension":"<dimension>","slice":"<slice>","ts":"<ISO8601>","reason":"stale"}' \
+  | node scripts/forge-checker-memory.js --write --cwd .
+```
+
+Do NOT delete fragment files here (see physical deletion step below).
+
+**d) Physical fragment deletion (LEDGER-gated)**
+
+For AUTO-MEMORY fragments:
+- A fragment at `.gsd/memory/<unit-id>.md` is eligible for physical deletion ONLY when:
+  1. Every `mem_id` in the fragment has a `prune` event (read fragment stats to confirm), AND
+  2. The `<unit-id>` matches a heading in `.gsd/LEDGER.md`.
+- If eligible: `rm .gsd/memory/<unit-id>.md`
+- If not eligible: skip silently (the prune events already applied — projection will exclude them).
+
+For CHECKER-MEMORY fragments:
+- A fragment at `.gsd/checker-memory/<slice-id>.md` is eligible for physical deletion ONLY when:
+  1. Every dimension record in the fragment has a `prune` event, AND
+  2. The owning milestone (derived from slice-id) matches a heading in `.gsd/LEDGER.md`.
+- If eligible: `rm .gsd/checker-memory/<slice-id>.md`
+- If not eligible: skip silently.
+
+**e) Milestone dirs**
+
 For each dir in the "Trim" list:
-- Double-check LEDGER has a matching heading (defensive)
+- Double-check LEDGER has a matching heading (defensive).
 - Remove every file inside `.gsd/milestones/M###/` EXCEPT `M###-SUMMARY.md`. Portable command (works on Linux/macOS/Git Bash):
   `find .gsd/milestones/M###/ -mindepth 1 -not -name 'M###-SUMMARY.md' -delete`
   PowerShell equivalent:
   `Get-ChildItem '.gsd/milestones/M###/' -Recurse -Force | Where-Object { $_.Name -ne 'M###-SUMMARY.md' } | Sort-Object FullName -Descending | Remove-Item -Force -Recurse`
 - Do NOT remove the directory itself, and do NOT remove `M###-SUMMARY.md`.
 
-**d) Task dirs**
+**f) Task dirs**
+
 For each dir in the "Trim" list:
-- Double-check LEDGER has a matching heading (defensive)
+- Double-check LEDGER has a matching heading (defensive).
 - Remove every file inside `.gsd/tasks/TASK-###/` EXCEPT `TASK-###-SUMMARY.md`. Use the same find/PowerShell pattern as above with the task-specific paths and filename.
 - Do NOT remove the directory itself, and do NOT remove `TASK-###-SUMMARY.md`.
 
-**e) Session files**
+**g) Session files**
+
 For each file in the "Drop" list:
 - `rm -f .gsd/sessions/<file>`
 
-**f) Telemetry log**
+**h) Telemetry log**
+
 Append to `.gsd/forge/events.jsonl`:
 ```json
-{"ts":"<ISO8601>","event":"sweep","scope":"<scope>","dropped":{"memories":N,"decisions":N,"sessions":N},"trimmed":{"milestones":N,"tasks":N},"flagged":{"memories":N,"decisions":N}}
+{"ts":"<ISO8601>","event":"sweep","scope":"<scope>","emitted":{"memory_prune_events":N,"checker_prune_events":N},"deleted":{"memory_fragments":N,"checker_fragments":N,"sessions":N},"trimmed":{"milestones":N,"tasks":N},"flagged":{"memories":N},"decisions_step":"no-op"}
 ```
 
 ### 7. Final report
@@ -217,27 +289,28 @@ Append to `.gsd/forge/events.jsonl`:
 ```
 ✓ Sweep applied
 
-  AUTO-MEMORY:    K/N kept   (M dropped, R flagged for review next time)
-  DECISIONS:      K/N kept
-  Milestone dirs: M trimmed (only SUMMARY kept), K untouched (active)
-  Task dirs:      M trimmed (only SUMMARY kept), K untouched (no SUMMARY yet)
-  Sessions:       M dropped, K kept (open)
+  AUTO-MEMORY:      N prune events emitted  (P fragments physically deleted, K fragments retained pending LEDGER)
+  DECISIONS:        no-op (S05 pending)
+  CHECKER-MEMORY:   N prune events emitted  (P fragments physically deleted, K fragments retained pending LEDGER)
+  Milestone dirs:   M trimmed (only SUMMARY kept), K untouched (active)
+  Task dirs:        M trimmed (only SUMMARY kept), K untouched (no SUMMARY yet)
+  Sessions:         M dropped, K kept (open)
 
 Files now lean. Commit to version control when ready.
 
 Flagged entries (re-evaluate before next sweep):
   - [MEMxxx] reason
-  - DECISIONS row N — reason
 ```
 
 ---
 
 ## Notes for the team
 
-- **Run after `complete-milestone`** — that's when LEDGER gets the milestone entry, making the milestone dir safe to trim down to its SUMMARY.
+- **Run after `complete-milestone`** — that's when LEDGER gets the milestone entry, making the milestone dir safe to trim down to its SUMMARY and memory fragments eligible for physical deletion.
+- **Prune events are logical, not physical** — the projection layer (S05+) reads prune events to exclude entries from the active set. Physical deletion follows only after LEDGER confirmation.
+- **DECISIONS are intentionally untouched** — the legacy row-pruning approach is obsolete now that decisions live as fragments in `.gsd/decisions/`. Fragment-level pruning policy will be defined in S05.
 - **For ad-hoc tasks (`/forge-task`)** — task dirs are trimmed automatically when SUMMARY + LEDGER entry exist, same rules as milestones.
 - **Why trim instead of delete** — the empty-ish milestone/task directory (with just the SUMMARY inside) stays visible in version control so teammates pulling the sweep see the milestone existed. This avoids the confusion of "where did M### go?" when one dev sweeps and another pulls.
-- **Flagged entries don't auto-drop** — re-evaluate them in the next sweep. If they still don't earn promotion (hits stay low, scope still narrow), drop manually next time.
-- **Re-renumbering is forbidden** — DECISIONS rows keep their original `#` even after prune (auditability).
+- **Flagged AUTO-MEMORY entries don't auto-drop** — re-evaluate them in the next sweep. If they still don't earn promotion (hits stay low, scope still narrow), emit prune events manually next time.
 - **Never edit `STATE.md`** — this command does not touch state.
 - **Never run during an active milestone phase** — only after `complete-milestone` or between tickets.
