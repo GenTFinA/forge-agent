@@ -49,33 +49,41 @@ The project is already managed by gsd-pi. Your job is to:
    grep -q "prefs.local.md" .gitignore 2>/dev/null || echo ".gsd/prefs.local.md" >> .gitignore
    ```
 
-6. **Create or update `.claude/settings.json`** — run the **Project Settings Merge** step (see below)
-
-7. **Create or update `.gsd/CODING-STANDARDS.md`** — run the **Coding Standards Auto-Detection** step (see below)
-
-8. **MCP Setup** — run the **MCP Setup** step (see below). Detect stack, suggest MCPs, ask user.
-
-9. **Report:**
+6. **Apply Layer 1 ignore rules** — run:
+   ```bash
+   node scripts/forge-ignore.js --apply
    ```
-   ✓ GSD agent initialized on existing project
+   Captures detected VCS and count of added rules for the final report.
 
-   Project: <name from PROJECT.md>
-   Active milestone: M### — Title (or "none")
-   Slices: X done / Y total
-   Next action: <from STATE.md>
+7. **Create or update `.claude/settings.json`** — run the **Project Settings Merge** step (see below)
 
-   Files created:
-   - CLAUDE.md ✓
-   - .claude/settings.json ✓ (bypass permissions + MCPs)
-   - .gsd/AUTO-MEMORY.md ✓
-   - .gsd/claude-agent-prefs.md ✓
-   - .gsd/CODING-STANDARDS.md ✓ (auto-detected)
+8. **Create or update `.gsd/CODING-STANDARDS.md`** — run the **Coding Standards Auto-Detection** step (see below)
 
-   MCPs configured:
-   - <name>: <status> (or "nenhum MCP configurado")
+9. **MCP Setup** — run the **MCP Setup** step (see below). Detect stack, suggest MCPs, ask user.
 
-   Ready. Use /gsd to advance next unit or /forge-auto for autonomous mode.
-   ```
+10. **Report:**
+    ```
+    ✓ GSD agent initialized on existing project
+
+    Project: <name from PROJECT.md>
+    Active milestone: M### — Title (or "none")
+    Slices: X done / Y total
+    Next action: <from STATE.md>
+    VCS detected: <git|svn|none>
+    Ignore rules added: <N> (or "(none — already up to date)")
+
+    Files created:
+    - CLAUDE.md ✓
+    - .claude/settings.json ✓ (bypass permissions + MCPs)
+    - .gsd/AUTO-MEMORY.md ✓
+    - .gsd/claude-agent-prefs.md ✓
+    - .gsd/CODING-STANDARDS.md ✓ (auto-detected)
+
+    MCPs configured:
+    - <name>: <status> (or "nenhum MCP configurado")
+
+    Ready. Use /gsd to advance next unit or /forge-auto for autonomous mode.
+    ```
 
 ---
 
@@ -165,43 +173,51 @@ The project is already managed by gsd-pi. Your job is to:
    grep -q "prefs.local.md" .gitignore 2>/dev/null || echo ".gsd/prefs.local.md" >> .gitignore
    ```
 
-6. **Create or update `.claude/settings.json`** — run the **Project Settings Merge** step (see below)
-
-7. **Create `.gsd/CODING-STANDARDS.md`** — run the **Coding Standards Auto-Detection** step (see below)
-
-8. **MCP Setup** — run the **MCP Setup** step (see below). Detect stack, suggest MCPs, ask user.
-
-9. **Report:**
+6. **Apply Layer 1 ignore rules** — run:
+   ```bash
+   node scripts/forge-ignore.js --apply
    ```
-   ✓ GSD agent initialized (new project)
+   Captures detected VCS and count of added rules for the final report.
 
-   Project: <name>
-   Structure created: .gsd/
+7. **Create or update `.claude/settings.json`** — run the **Project Settings Merge** step (see below)
 
-   Files created:
-   - CLAUDE.md
-   - .claude/settings.json       ← bypass permissions + MCPs (commit this)
-   - .gsd/PROJECT.md
-   - .gsd/REQUIREMENTS.md
-   - .gsd/DECISIONS.md
-   - .gsd/STATE.md
-   - .gsd/KNOWLEDGE.md
-   - .gsd/AUTO-MEMORY.md
-   - .gsd/CODING-STANDARDS.md    ← auto-detected coding standards
-   - .gsd/claude-agent-prefs.md  ← repo shared prefs (commit this)
-   .gitignore updated:
-   - .gsd/prefs.local.md         ← gitignored personal overrides
+8. **Create `.gsd/CODING-STANDARDS.md`** — run the **Coding Standards Auto-Detection** step (see below)
 
-   MCPs configured:
-   - <name>: <status> (or "nenhum MCP configurado")
+9. **MCP Setup** — run the **MCP Setup** step (see below). Detect stack, suggest MCPs, ask user.
 
-   Prefs resolution order (later overrides earlier):
-     1. ~/.claude/forge-agent-prefs.md  (user-global)
-     2. .gsd/claude-agent-prefs.md      (repo shared)
-     3. .gsd/prefs.local.md             (local personal, gitignored)
+10. **Report:**
+    ```
+    ✓ GSD agent initialized (new project)
 
-   Next: /forge-new-milestone <descrição do que entregar primeiro>
-   ```
+    Project: <name>
+    Structure created: .gsd/
+    VCS detected: <git|svn|none>
+    Ignore rules added: <N> (or "(none — already up to date)")
+
+    Files created:
+    - CLAUDE.md
+    - .claude/settings.json       ← bypass permissions + MCPs (commit this)
+    - .gsd/PROJECT.md
+    - .gsd/REQUIREMENTS.md
+    - .gsd/DECISIONS.md
+    - .gsd/STATE.md
+    - .gsd/KNOWLEDGE.md
+    - .gsd/AUTO-MEMORY.md
+    - .gsd/CODING-STANDARDS.md    ← auto-detected coding standards
+    - .gsd/claude-agent-prefs.md  ← repo shared prefs (commit this)
+    .gitignore updated:
+    - .gsd/prefs.local.md         ← gitignored personal overrides
+
+    MCPs configured:
+    - <name>: <status> (or "nenhum MCP configurado")
+
+    Prefs resolution order (later overrides earlier):
+      1. ~/.claude/forge-agent-prefs.md  (user-global)
+      2. .gsd/claude-agent-prefs.md      (repo shared)
+      3. .gsd/prefs.local.md             (local personal, gitignored)
+
+    Next: /forge-new-milestone <descrição do que entregar primeiro>
+    ```
 
 ---
 
