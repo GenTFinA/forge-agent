@@ -109,6 +109,33 @@ A partir da v1.0, o Forge Agent usa **3 comandos slash** e **skills** para tudo 
 
 ---
 
+## Fragment store + projection
+
+Forge Agent stores `.gsd/` knowledge (ledger, decisions, auto-memory) as **per-unit fragments**
+instead of mutable monolith files — one small file per milestone, session, or task.
+
+Three stores live under `.gsd/`:
+
+| Store | Path | Contents |
+|-------|------|----------|
+| Ledger | `.gsd/ledger/<id>.md` | Compact record of each completed milestone |
+| Decisions | `.gsd/decisions/<id>.md` | Architecture decisions scoped to a unit |
+| Memory | `.gsd/memory/<id>.md` | Auto-learned patterns from completed work |
+
+The familiar monolith files (`LEDGER.md`, `DECISIONS.md`, `AUTO-MEMORY.md`) are **projection
+cache** — rebuilt on-read by [`scripts/forge-projection.js`](scripts/forge-projection.js) and
+excluded from version control (`.gitignore`/`svn:ignore`). This makes the stores
+conflict-free by construction: each fragment has exactly one owner (one unit of work, one
+developer, one branch).
+
+Migration from the pre-M001 monolith layout runs automatically during `/forge-update` and
+keeps a `.bak` copy of every monolith until you verify the projection matches.
+
+For full details — layout, fragment schema, projection engine, migration, and doctor checks —
+see [docs/fragment-store.md](docs/fragment-store.md).
+
+---
+
 ## Documentação
 
 | Doc | Conteúdo |

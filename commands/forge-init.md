@@ -1,5 +1,5 @@
 ---
-description: "Inicializa o agente GSD no projeto atual. Detecta projeto gsd-pi existente ou cria estrutura nova. Use: /forge-init | /forge-init <descrição do projeto>"
+description: "Inicializa o agente GSD no projeto atual. Detecta projeto gsd-pi existente ou cria estrutura nova. Configura o fragment-store layout (.gsd/ledger/, .gsd/decisions/, .gsd/memory/) com ignore rules para os caches de projeção. Use: /forge-init | /forge-init <descrição do projeto>"
 allowed-tools: Read, Write, Edit, Bash, Glob, AskUserQuestion
 ---
 
@@ -177,6 +177,12 @@ The project is already managed by gsd-pi. Your job is to:
    ```bash
    node scripts/forge-ignore.js --apply
    ```
+   This writes VCS ignore rules for the projection cache files (`LEDGER.md`, `DECISIONS.md`,
+   `AUTO-MEMORY.md` under `.gsd/`). The fragment-store directories (`.gsd/ledger/`,
+   `.gsd/decisions/`, `.gsd/memory/`, `.gsd/checker-memory/`) are created lazily on first
+   write — `/forge-init` does not pre-create them. See [docs/fragment-store.md](../docs/fragment-store.md)
+   for the full fragment-store + projection architecture.
+
    Captures detected VCS and count of added rules for the final report.
 
 7. **Create or update `.claude/settings.json`** — run the **Project Settings Merge** step (see below)
