@@ -43,10 +43,12 @@ const LOCAL_IGNORE_PATHS = Object.freeze([
 // Derived monoliths regenerated on-read from fragment stores.
 // The fragment file is the source of truth (e.g. .gsd/ledger/<id>.md);
 // the monolith is a projection rebuilt by S05's read layer.
-// S04 will add '.gsd/AUTO-MEMORY.md'.
+// All 4 entries are projection targets — S05 regenerates them on-read from the fragment stores under .gsd/{ledger,decisions,memory,checker-memory}/.
 const PROJECTION_IGNORE_PATHS = Object.freeze([
   '.gsd/LEDGER.md',
   '.gsd/DECISIONS.md',
+  '.gsd/AUTO-MEMORY.md',
+  '.gsd/CHECKER-MEMORY.md',
 ]);
 
 // Internal: union of all ignored paths (LOCAL + PROJECTION).
