@@ -253,9 +253,9 @@ function mergeAutoMemory(cwd, sourcePath) {
 }
 
 // ── LEDGER.md merger ─────────────────────────────────────────────────────────
-// Append a single milestone-summary block to the global LEDGER.md.
-// Block format: `## M### — <name>\n<one-line summary>\nKey decisions: ...\nFiles touched: ...`
-// We expect the per-milestone source to be ready-to-append (the completer writes it).
+// @deprecated as of M001/S02 — fragment store; retained for backward compatibility
+// if a stale M###-LEDGER-ENTRY.md is found on disk. Do not invoke from mergeMilestone.
+// The fragment store (.gsd/ledger/<id>.md) is now the source of truth.
 
 function mergeLedger(cwd, sourcePath) {
   const sourceText = safeRead(sourcePath);
@@ -378,12 +378,11 @@ function mergeEvents(cwd, sourcePath) {
 // ── Top-level: mergeMilestone ───────────────────────────────────────────────
 async function mergeMilestone(cwd, milestoneId, opts) {
   opts = opts || {};
-  const result = { merged: { decisions: 0, memories: 0, ledger: false, checker: 0, events: 0 }, errors: [] };
+  const result = { merged: { decisions: 0, memories: 0, checker: 0, events: 0 }, errors: [] };
 
   const sources = {
     decisions: perMilestonePath(cwd, milestoneId, 'DECISIONS.md'),
     memories:  perMilestonePath(cwd, milestoneId, 'AUTO-MEMORY.md'),
-    ledger:    perMilestonePath(cwd, milestoneId, 'LEDGER-ENTRY.md'),
     checker:   perMilestonePath(cwd, milestoneId, 'CHECKER-MEMORY.md'),
     events:    perMilestonePath(cwd, milestoneId, 'events.jsonl'),
   };
@@ -391,7 +390,6 @@ async function mergeMilestone(cwd, milestoneId, opts) {
   const tasks = [
     { name: 'DECISIONS.md',      run: () => mergeDecisions(cwd, sources.decisions),     resultKey: 'decisions', getCount: r => r.merged },
     { name: 'AUTO-MEMORY.md',    run: () => mergeAutoMemory(cwd, sources.memories),     resultKey: 'memories',  getCount: r => r.merged },
-    { name: 'LEDGER.md',         run: () => mergeLedger(cwd, sources.ledger),           resultKey: 'ledger',    getCount: r => !!r.merged },
     { name: 'CHECKER-MEMORY.md', run: () => mergeCheckerMemory(cwd, sources.checker),   resultKey: 'checker',   getCount: r => r.merged },
     { name: 'events.jsonl',      run: () => mergeEvents(cwd, sources.events),           resultKey: 'events',    getCount: r => r.merged },
   ];
@@ -509,16 +507,17 @@ Flags:
 Reads:
   .gsd/milestones/M###/M###-DECISIONS.md
   .gsd/milestones/M###/M###-AUTO-MEMORY.md
-  .gsd/milestones/M###/M###-LEDGER-ENTRY.md
   .gsd/milestones/M###/M###-CHECKER-MEMORY.md
   .gsd/milestones/M###/M###-events.jsonl
 
 Writes (under .gsd/.locks/{name}/):
   .gsd/DECISIONS.md (append)
   .gsd/AUTO-MEMORY.md (promote + cap-50)
-  .gsd/LEDGER.md (append entry)
   .gsd/CHECKER-MEMORY.md (merge tables)
   .gsd/forge/events.jsonl (append)
+
+Note: LEDGER is handled by the fragment store (forge-ledger.js --write) in the completer
+  step 5a. The merger no longer reads M###-LEDGER-ENTRY.md or writes LEDGER.md.
 `);
     return;
   }

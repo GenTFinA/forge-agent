@@ -451,23 +451,26 @@ Given all `T##-SUMMARY.md` files from the slice:
    ```
 4. Emit milestone completion report: slices completed, total tasks, key decisions made
 
-5. **Write ledger entry + run merger** (per-milestone → globals under lockfile, M004+):
+5. **Write ledger fragment + run merger** (M001/S02+):
 
-   **5a. Write per-milestone ledger entry** to `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-LEDGER-ENTRY.md`. This is the block that the merger will append to the global `LEDGER.md`. Format (max 15 lines):
-   ```markdown
-   ## {M###} — {milestone title} · {YYYY-MM-DD}
-
-   {2-3 sentence description of what was built and delivered}
-
-   **Slices:** S01 — title · S02 — title · ...
-   **Key files:** path/to/file, path/to/file (up to 8, most important)
-   **Key decisions:** one-liner · one-liner (up to 3)
-
-   ---
+   **5a. Write LEDGER fragment** to `.gsd/ledger/<milestone-id>.md` via `forge-ledger.js`. The fragment is the source of truth — no global `LEDGER.md` write path in this step. Build a JSON payload and pipe it to the script:
+   ```bash
+   FORGE_SCRIPTS_DIR=$([ -f scripts/forge-ledger.js ] && echo scripts || echo "$HOME/.claude/scripts")
+   node "$FORGE_SCRIPTS_DIR/forge-ledger.js" --write --cwd "{WORKING_DIR}" <<'EOF'
+   {
+     "id": "{M###}",
+     "title": "{milestone title}",
+     "completed_at": "$(date -u +%FT%TZ)",
+     "slices": ["S01 — title", "S02 — title"],
+     "key_files": ["path/to/file"],
+     "key_decisions": ["one-liner"],
+     "body": "{2-3 sentence description of what was built and delivered. Keep under 10 lines. Focus on WHAT was built, not HOW.}"
+   }
+   EOF
    ```
-   Keep under 15 lines. Focus on WHAT was built, not HOW.
+   On failure: log a warning and continue — the LEDGER fragment is non-critical relative to the merger. Do not return `status: blocked`.
 
-   **5b. Invoke the merger** to promote all per-milestone files to workspace globals under lockfile:
+   **5b. Invoke the merger** to promote all per-milestone files to workspace globals under lockfile. Note: the merger no longer touches LEDGER (handled by the fragment write in 5a); DECISIONS/AUTO-MEMORY/CHECKER/events still merge normally.
    ```bash
    FORGE_SCRIPTS_DIR=$([ -f scripts/forge-merger.js ] && echo scripts || echo "$HOME/.claude/scripts")
    node "$FORGE_SCRIPTS_DIR/forge-merger.js" --milestone {M###} --cwd "{WORKING_DIR}" --holder "completer:{M###}"
@@ -475,13 +478,12 @@ Given all `T##-SUMMARY.md` files from the slice:
    The merger reads:
    - `M###-DECISIONS.md` → append rows (dedup by ID) to global `DECISIONS.md` under `.gsd/.locks/DECISIONS.md/`
    - `M###-AUTO-MEMORY.md` → promote entries (dedup by ID or description match), apply cap-50 with decay ordering, write `AUTO-MEMORY.md` under `.gsd/.locks/AUTO-MEMORY.md/`
-   - `M###-LEDGER-ENTRY.md` → append block to global `LEDGER.md` (idempotent on header match) under `.gsd/.locks/LEDGER.md/`
    - `M###-CHECKER-MEMORY.md` → merge tables (accumulate Count, update Last Seen) into global `CHECKER-MEMORY.md` under `.gsd/.locks/CHECKER-MEMORY.md/`
    - `M###-events.jsonl` → append all lines to global `.gsd/forge/events.jsonl`
 
    Parse the JSON output. On non-empty `errors` array: emit warning but proceed (cleanup in step 6 is still safe — per-milestone files remain on disk). On success: log merge counts in the completion report.
 
-   The global `LEDGER.md`, `AUTO-MEMORY.md`, `DECISIONS.md`, `CHECKER-MEMORY.md`, `CODING-STANDARDS.md` and `STATE.md` (dashboard) are durable across `milestone_cleanup` — never touched by archive/delete.
+   The fragment store (`.gsd/ledger/`), `AUTO-MEMORY.md`, `DECISIONS.md`, `CHECKER-MEMORY.md`, `CODING-STANDARDS.md` and `STATE.md` (dashboard) are durable across `milestone_cleanup` — never touched by archive/delete.
 
 6. **Cleanup milestone artifacts** — based on `milestone_cleanup` from injected config:
    - `keep` (default): do nothing — all files remain
