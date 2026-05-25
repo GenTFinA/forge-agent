@@ -370,18 +370,6 @@ Milestones e tasks soltas (`/forge-task`) usam IDs no formato `M-<YYYYMMDDHHMMSS
 - **Nova skill:** Criar `skills/forge-<name>/SKILL.md`, invocar via `Skill("forge-<name>")` — nunca via Agent intermediário
 - **Skills são auto-suficientes:** Não injetar contexto no prompt — skill lê o que precisa do disco
 
-## Forge Auto-Rules
-
-Regras auto-promovidas do sistema de memória emergente (confidence ≥ 0.85, hits ≥ 3):
-
-- [MEM001] PostCompact recovery handler must write compact-signal.json AFTER compaction completes, not before. Hook re-reads auto-mode.json from disk and deletes signal after recovery check. *(auto-promoted 2026-04-15, confidence:0.95, hits:3)*
-
-- [MEM004] All forge-* skills use disable-model-invocation: true to prevent skill description from being injected into worker context, saving tokens and reducing noise. Confirmed across forge-auto, forge-task, forge-new-milestone, and all other skills. *(auto-promoted 2026-04-15, confidence:0.95, hits:3)*
-
-- [MEM005] Gradual skill migration: move commands to skills/ with thin shims (6–7 lines), not big-bang refactoring. Shims pass $ARGUMENTS through via Skill({skill:"name", args:"$ARGUMENTS"}) to preserve CLI flags. Commands reduced from ~950 total lines to ~20 shim lines. All migrated skills follow disable-model-invocation: true convention. *(auto-promoted 2026-04-15, confidence:0.95, hits:6)*
-
-- [MEM011] Dispatch templates use placeholder substitution (Read-path directives with mandatory vs optional artifacts) instead of inline artifact-reading logic. All 7 dispatch templates standardized: templates are thin data-flow descriptors; workers handle all read I/O. Reduces orchestrator prompt size and ensures fresh state per worker. 24 inlined {content...} placeholders eliminated. Note: forge-next preserves selective memory injection block (lines 123-129) unique to step-by-step execution model. *(auto-promoted 2026-04-15, confidence:0.95, hits:6)*
-
 ## Anti-Hallucination Layer (M003)
 
 Conjunto de 5 componentes que substituem "self-reported done" por verificação com evidência. Shipped ao longo de M003 (S01–S04). Quatro componentes são **advisory por padrão** (documentam flags em SUMMARY, não bloqueiam). Apenas o schema check do executor é enforcing desde o dia 1 — um schema que ninguém escreve é inútil.
@@ -430,9 +418,3 @@ Somente o check de schema do executor (S01, componente #1) é enforcing em M003.
 - `file_audit.ignore_list` — customize adicionando/removendo globs. Não muda a postura advisory — só o que é flagged.
 
 Antes de ativar qualquer um destes em um projeto de produção: rode ≥ 1 milestone completo em modo advisory para medir a taxa de falsos positivos das heurísticas (regex stub, depth-2 walker, dimension scoring). M003 explicitamente não recomenda flipping defaults em v1.
-
-## Estado atual
-
-- **Milestone ativo:** — (M003 concluído)
-- **Fase:** idle — M003 encerrado com sucesso.
-- **Próxima ação:** Executar `/forge-new-milestone <descrição>` para iniciar o próximo milestone.
