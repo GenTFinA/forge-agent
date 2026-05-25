@@ -39,7 +39,8 @@ Call `EnterPlanMode`. You are now in read-only mode — you may read any file an
 
 ### Step 1 — Score initial clarity
 
-Before asking anything, read PROJECT.md, REQUIREMENTS.md, DECISIONS.md, and any existing CONTEXT. Score each dimension from 0–100:
+<!-- pre-S05: monolith → projection. DECISIONS.md is now rendered on demand via `node scripts/forge-projection.js --render decisions`. Prefer that over direct Read when the full table is needed; use the dispatch-injected ## Prior Decisions path for slice-scoped decisions. -->
+Before asking anything, read PROJECT.md, REQUIREMENTS.md, and any existing CONTEXT. For prior decisions: use `node scripts/forge-projection.js --render decisions` (fragment-store aware) or read the ## Prior Decisions block injected by the orchestrator. Score each dimension from 0–100:
 
 | Dimension | What it measures |
 |-----------|-----------------|

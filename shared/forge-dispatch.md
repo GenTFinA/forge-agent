@@ -222,7 +222,8 @@ Read: {WORKING_DIR}/.gsd/REQUIREMENTS.md
 
 ## Delivered Milestones (history)
 
-Read if exists: {WORKING_DIR}/.gsd/LEDGER.md
+<!-- pre-S05: monolith → projection. .gsd/LEDGER.md is now rendered by forge-projection.js from .gsd/ledger/ fragments. Use projection output; fall back to monolith if fragments dir absent. -->
+Read stdout of: `node {WORKING_DIR}/scripts/forge-projection.js --render ledger --cwd {WORKING_DIR}` (fragment-store aware; falls back to .gsd/LEDGER.md monolith if no fragments exist)
 
 ## Directory Conventions & Asset Map
 
@@ -349,12 +350,14 @@ Read if exists: {WORKING_DIR}/.gsd/milestones/{M###}/{M###}-BRAINSTORM.md
 ## Prior Decisions (do not re-debate)
 
 For discuss-slice: Read if exists: {WORKING_DIR}/.gsd/milestones/{M###}/{M###}-CONTEXT.md — extract ## Decisions section (locked milestone decisions, do not re-open)
-For discuss-milestone: Read last 30 lines: {WORKING_DIR}/.gsd/DECISIONS.md — decisions from prior milestones only
+<!-- pre-S05: monolith → projection. .gsd/DECISIONS.md is now rendered by forge-projection.js from .gsd/decisions/ fragments. -->
+For discuss-milestone: Run `node {WORKING_DIR}/scripts/forge-projection.js --render decisions --cwd {WORKING_DIR}` and use last 30 rows of output — decisions from prior milestones only
 Either way: these are closed — do not re-open or re-debate.
 
 ## Delivered Milestones (discuss-milestone only)
 
-For discuss-milestone: Read if exists: {WORKING_DIR}/.gsd/LEDGER.md — use as context on what already exists; do not re-debate delivered work
+<!-- pre-S05: monolith → projection. LEDGER now rendered via forge-projection.js from .gsd/ledger/ fragments. -->
+For discuss-milestone: Run `node {WORKING_DIR}/scripts/forge-projection.js --render ledger --cwd {WORKING_DIR}` — use output as context on what already exists; do not re-debate delivered work
 
 ## Project Memory
 
