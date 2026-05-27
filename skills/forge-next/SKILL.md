@@ -350,12 +350,32 @@ Read PREFS for `skip_discuss` and `skip_research`. If the current unit type is s
 
 ### 3. Build worker prompt
 
-**Selective memory injection** — filter `ALL_MEMORIES` to entries relevant to this unit:
-- For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include memories whose description shares ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries.
-- For `plan-slice` / `research-slice`: include `architecture` and `pattern` memories related to the milestone scope. Cap at 8 entries.
-- For other unit types: include top-5 entries by confidence score.
-- If no entries match: inject `(none)`.
+**Selective memory injection** — read memories from the fragment store, then filter to entries relevant to this unit:
+
+```bash
+FRAGMENT_LIST=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --list 2>/dev/null || echo "[]")
+```
+
+If `FRAGMENT_LIST` is a non-empty JSON array, iterate over each `unit_id` in the list:
+
+```bash
+# For each unit_id in FRAGMENT_LIST:
+FRAGMENT=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --read <unit-id> 2>/dev/null || echo "null")
+```
+
+Collect fragments where `FRAGMENT` is non-null. Apply the filter rules below to the collected fragments (each fragment has `facts[]`, `category`, `confidence`, `hits`):
+
+- For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include fragments whose `facts[]` text shares ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries.
+- For `plan-slice` / `research-slice`: include fragments with categories `architecture` and `pattern` related to the milestone scope. Cap at 8 entries.
+- For other unit types: include top-5 fragments by `confidence` score.
+
+**Fallback:** If `FRAGMENT_LIST` is an empty array `[]` or `forge-memory.js --list` errors, fall back to `ALL_MEMORIES` (loaded from `.gsd/AUTO-MEMORY.md` at step 5 of `## Load context`) and apply the same filter rules above. This preserves backward compatibility with pre-fragment-store workspaces.
+
+If no entries match after filtering: inject `(none)`.
+
 Store as `RELEVANT_MEMORIES` and use in the worker prompt `## Project Memory` section.
+
+> For human-readable consolidation, run `/forge-doctor --regen-projection` to rebuild the monolith from fragments (writes `AUTO-MEMORY.md` via `forge-memory.js --write-all`). See `forge-projection` in doctor help.
 
 Use the template from `~/.claude/forge-dispatch.md` for the current `unit_type`.
 Substitute placeholders:
