@@ -6,7 +6,7 @@
 //   decisionsDir(cwd)                   → string  // absolute path to decisions dir
 //   fragmentPath(cwd, unitId)           → string  // absolute path to <unit-id>.md
 //   parseFragment(text)                 → object  // parse markdown with YAML frontmatter
-//   writeFragment(cwd, fragment)        → { path, created }
+//   writeFragment(cwd, fragment, opts)  → { path, created }
 //   readFragment(cwd, unitId)           → object | null
 //   listFragments(cwd)                  → Array<{ unitId, path }>
 //
@@ -15,6 +15,7 @@
 //   node forge-decisions.js --read <unit-id> [--cwd <dir>]
 //   node forge-decisions.js --write [--cwd <dir>]   (reads JSON fragment from stdin)
 //   node forge-decisions.js --validate <unit-id> [--cwd <dir>]
+//   node forge-decisions.js --smoke-regression
 //   node forge-decisions.js --help
 //
 // Exit codes:
@@ -28,6 +29,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { isValid, entityKind } = require('./forge-ids');
+const yamlSafe = require('./forge-yaml-safe');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -79,6 +81,8 @@ function fragmentPath(cwd, unitId) {
 // No `#`/numbering column in storage — numbering is derived at projection time.
 // Unknown frontmatter keys are passed through as-is.
 // Accepts both inline ([...]) and block (- item) array forms.
+// Scalar values in decision objects use yamlSafe.parseScalar for lossless
+// round-trip of multi-line and colon-leading strings.
 function parseFragment(text) {
   const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match) {
@@ -98,8 +102,10 @@ function parseFragment(text) {
   let currentArray = null;
   let inDecisionObject = false;
   let currentDecision = null;
-
-  for (let i = 0; i < lines.length; i++) {
+  // Track current line index so parseScalar can consume block scalars.
+  // We use a for-loop with manual `i` so we can advance past block-scalar lines.
+  let i = 0;
+  while (i < lines.length) {
     const line = lines[i];
 
     // Detect start of a decision object item: "  - when: ..." or "- when: ..."
@@ -110,8 +116,19 @@ function parseFragment(text) {
         result['decisions'].push(currentDecision);
       }
       currentDecision = {};
-      const key = decisionItemStart[2];
-      currentDecision[key] = decisionItemStart[3].trim();
+      const dKey = decisionItemStart[2];
+      // The rest of the line after "key: " is the scalar value (or block indicator).
+      // We feed a synthetic lines array starting from the remainder.
+      const remainder = decisionItemStart[3];
+      // Build a synthetic lines slice: first line is remainder, then continuation.
+      // We need to use parseScalar on this remainder position.
+      // Indent for decision object items is 4 (nested under "  - ")
+      const syntheticLines = [remainder, ...lines.slice(i + 1)];
+      const parsed = yamlSafe.parseScalar(syntheticLines, 0, 4);
+      currentDecision[dKey] = parsed.value;
+      // Advance i by the number of extra lines consumed (block scalar lines).
+      // parsed.nextIndex - 1 = extra lines consumed beyond line 0 of syntheticLines.
+      i += parsed.nextIndex; // i was at the "  - key: ..." line; advance past consumed lines.
       inDecisionObject = true;
       currentArray = null;
       continue;
@@ -121,7 +138,13 @@ function parseFragment(text) {
     if (inDecisionObject && currentDecision !== null) {
       const objKv = line.match(/^\s{2,}([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
       if (objKv) {
-        currentDecision[objKv[1]] = objKv[2].trim();
+        const dKey = objKv[1];
+        const remainder = objKv[2];
+        // Continuation keys are at indent 4. Build synthetic slice from remainder.
+        const syntheticLines = [remainder, ...lines.slice(i + 1)];
+        const parsed = yamlSafe.parseScalar(syntheticLines, 0, 4);
+        currentDecision[dKey] = parsed.value;
+        i += parsed.nextIndex;
         continue;
       }
       // Unindented or non-kv line ends the decision object
@@ -136,6 +159,7 @@ function parseFragment(text) {
     const arrayItem = line.match(/^\s*-\s+(.*)$/);
     if (arrayItem && currentArray !== null && currentKey !== 'decisions') {
       currentArray.push(arrayItem[1].trim());
+      i++;
       continue;
     }
 
@@ -151,6 +175,7 @@ function parseFragment(text) {
         currentArray = null;
         currentDecision = null;
         inDecisionObject = false;
+        i++;
         continue;
       }
 
@@ -173,6 +198,7 @@ function parseFragment(text) {
         currentArray = null;
         inDecisionObject = false;
       }
+      i++;
       continue;
     }
 
@@ -183,6 +209,7 @@ function parseFragment(text) {
     }
     inDecisionObject = false;
     currentArray = null;
+    i++;
   }
 
   // Flush trailing decision object
@@ -247,7 +274,8 @@ function mergeDecisions(existing, incoming) {
 // Serializes a fragment object to YAML frontmatter string.
 // Keys are emitted in alphabetical order for diff stability.
 // `decisions` array uses block-of-objects form.
-// Simple arrays use block form. Scalars use plain form.
+// Simple arrays use block form. Scalars use yamlSafe.serializeScalar for
+// lossless round-trip (multi-line, colon-leading, etc.).
 function serializeFrontmatter(fragment) {
   const skip = new Set(['body']);
   const keys = Object.keys(fragment).filter(k => !skip.has(k)).sort();
@@ -272,7 +300,12 @@ function serializeFrontmatter(fragment) {
           let first = true;
           for (const dk of allKeys) {
             const prefix = first ? '  - ' : '    ';
-            lines.push(`${prefix}${dk}: ${d[dk] !== undefined && d[dk] !== null ? d[dk] : ''}`);
+            // currentIndent for decision object items is 4 (under "  - ")
+            const serialized = yamlSafe.serializeScalar(
+              d[dk] !== undefined && d[dk] !== null ? d[dk] : '',
+              4
+            );
+            lines.push(`${prefix}${dk}: ${serialized}`);
             first = false;
           }
         }
@@ -292,7 +325,7 @@ function serializeFrontmatter(fragment) {
     } else if (val === null || val === undefined) {
       lines.push(`${key}: `);
     } else {
-      lines.push(`${key}: ${val}`);
+      lines.push(`${key}: ${yamlSafe.serializeScalar(val, 0)}`);
     }
   }
   return lines.join('\n');
@@ -301,21 +334,17 @@ function serializeFrontmatter(fragment) {
 // ── writeFragment ─────────────────────────────────────────────────────────────
 // Writes a DECISIONS fragment to disk.
 // fragment shape: { unit_id, decisions: [{when, scope, decision, choice, rationale, revisable}, ...], ...rest }
+// opts shape: { runId?: string, sessionId?: string }  (passed to writeAtomic for lock tracking)
 // Merges with existing fragment if present (dedup on tuple (when, decision, choice)).
 // Returns { path: string, created: boolean }
 // created: false if content is identical after merge (idempotent).
-function writeFragment(cwd, fragment) {
+function writeFragment(cwd, fragment, opts) {
+  if (opts === undefined) opts = {};
   if (!fragment || !fragment.unit_id) {
     throw new Error('fragment.unit_id is required');
   }
 
   const fpath = fragmentPath(cwd, fragment.unit_id); // throws if invalid id
-  const dir = path.dirname(fpath);
-
-  // mkdir -p
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
 
   // Merge with existing if present
   let base = fragment;
@@ -345,7 +374,13 @@ function writeFragment(cwd, fragment) {
     }
   }
 
-  fs.writeFileSync(fpath, content, 'utf8');
+  // Atomic write with optional lock tracking via runId/sessionId
+  yamlSafe.writeAtomic(fpath, content, {
+    cwd: cwd,
+    runId: opts.runId || null,
+    sessionId: opts.sessionId || null,
+  });
+
   return { path: fpath, created: true };
 }
 
@@ -404,6 +439,7 @@ Commands:
   --read <unit-id> [--cwd <dir>] Read and print a fragment (JSON), null if missing
   --write [--cwd <dir>]           Write/merge fragment from stdin (JSON fragment)
   --validate <unit-id> [--cwd <dir>] Validate ID and check if fragment exists
+  --smoke-regression              Run inline regression smoke test (exit 0 = PASS)
   --help, -h                      Show this help
 
 Unit ID forms accepted:
@@ -418,6 +454,128 @@ Exit codes:
   0  Success
   1  Runtime error (invalid id, parse error, I/O failure)
   2  Unknown or missing arguments`);
+}
+
+// ── smokeRegression ───────────────────────────────────────────────────────────
+// Inline regression smoke: verifies multi-line round-trip, colon-leading
+// round-trip, and that forge-projection.js renderDecisions() still works
+// against a fragment with block-scalar content.
+function smokeRegression() {
+  const os = require('os');
+  const smokeDir = path.join(os.tmpdir(), '.gsd-smoke-t04');
+  let allPassed = true;
+
+  function assert(label, actual, expected) {
+    if (actual === expected) {
+      console.log('PASS: ' + label);
+    } else {
+      console.log('FAIL: ' + label + '\n  expected: ' + JSON.stringify(expected) + '\n  got:      ' + JSON.stringify(actual));
+      allPassed = false;
+    }
+  }
+
+  // Cleanup any previous run
+  try { fs.rmSync(smokeDir, { recursive: true, force: true }); } catch {}
+  fs.mkdirSync(smokeDir, { recursive: true });
+
+  // We need a valid milestone ID to write a fragment
+  // Use a legacy-style ID that forge-ids accepts
+  const unitId = 'M001';
+  const multilineRationale = 'line1\nline2\nline3';
+  const colonLeadingChoice = ':option-a';
+
+  // ── Test A: multi-line rationale round-trip ──
+  const fragA = {
+    unit_id: unitId,
+    decisions: [
+      {
+        when: '2026-01-01',
+        scope: 'S01',
+        decision: 'Use postgres',
+        choice: colonLeadingChoice,
+        rationale: multilineRationale,
+        revisable: 'yes',
+      },
+    ],
+  };
+
+  let resultA;
+  try {
+    resultA = writeFragment(smokeDir, fragA);
+  } catch (e) {
+    console.log('FAIL: writeFragment threw: ' + e.message);
+    allPassed = false;
+    fs.rmSync(smokeDir, { recursive: true, force: true });
+    process.exit(1);
+  }
+  assert('A: writeFragment created', resultA.created, true);
+
+  const readBack = readFragment(smokeDir, unitId);
+  assert('A: readFragment returns non-null', readBack !== null, true);
+  assert('A: decisions array length', readBack && readBack.decisions.length, 1);
+
+  const d0 = readBack && readBack.decisions[0];
+  assert('A: multi-line rationale round-trip', d0 && d0.rationale, multilineRationale);
+  assert('A: colon-leading choice round-trip', d0 && d0.choice, colonLeadingChoice);
+
+  // ── Test B: 3-arg writeFragment (opts with runId/sessionId) ──
+  const fragB = {
+    unit_id: unitId,
+    decisions: [
+      {
+        when: '2026-01-02',
+        scope: 'S02',
+        decision: 'Use redis',
+        choice: 'standalone',
+        rationale: 'Performance',
+        revisable: 'no',
+      },
+    ],
+  };
+
+  let resultB;
+  try {
+    resultB = writeFragment(smokeDir, fragB, { runId: 'smoke-run-1', sessionId: 'smoke-sess-1' });
+  } catch (e) {
+    console.log('FAIL: 3-arg writeFragment threw: ' + e.message);
+    allPassed = false;
+    fs.rmSync(smokeDir, { recursive: true, force: true });
+    process.exit(1);
+  }
+  assert('B: 3-arg writeFragment created (merge appended)', resultB.created, true);
+  const readBackB = readFragment(smokeDir, unitId);
+  assert('B: merged fragment has 2 decisions', readBackB && readBackB.decisions.length, 2);
+
+  // ── Test C: idempotent write ──
+  const resultC = writeFragment(smokeDir, fragA);
+  assert('C: idempotent re-write → created: false', resultC.created, false);
+
+  // ── Test D: renderDecisions regression via forge-projection ──
+  let projectionPassed = false;
+  try {
+    const projMod = require('./forge-projection');
+    const rendered = projMod.renderDecisions(smokeDir);
+    // Must return a non-empty string containing our multi-line rationale content
+    assert('D: renderDecisions returns string', typeof rendered, 'string');
+    assert('D: renderDecisions non-empty', rendered.length > 0, true);
+    // The rendered output should contain at least part of the decision text
+    assert('D: renderDecisions contains decision text', rendered.includes('Use postgres'), true);
+    projectionPassed = true;
+  } catch (e) {
+    console.log('FAIL: renderDecisions threw: ' + e.message);
+    allPassed = false;
+  }
+
+  // ── Cleanup ──
+  try { fs.rmSync(smokeDir, { recursive: true, force: true }); } catch {}
+
+  if (allPassed) {
+    console.log('\nPASS — all smoke-regression assertions passed');
+    process.exit(0);
+  } else {
+    console.log('\nFAIL — one or more smoke-regression assertions failed');
+    process.exit(1);
+  }
 }
 
 function cliMain(argv) {
@@ -438,6 +596,11 @@ function cliMain(argv) {
   if (!cmd || cmd === '--help' || cmd === '-h') {
     printUsage();
     process.exit(0);
+  }
+
+  if (cmd === '--smoke-regression') {
+    smokeRegression();
+    return;
   }
 
   if (cmd === '--list') {
