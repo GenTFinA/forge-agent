@@ -1,18 +1,20 @@
 #!/usr/bin/env node
 // forge-projection — Unified projection engine for Forge Agent fragment stores
 //
-// Reads .gsd/ledger/*.md, .gsd/decisions/*.md, .gsd/memory/*.md fragments
-// and reconstructs the legacy monolith content on-read.
+// Reads .gsd/ledger/*.md, .gsd/decisions/*.md, .gsd/memory/*.md,
+// .gsd/checker-memory/*.md fragments and reconstructs the legacy monolith
+// content on-read.
 //
 // Library exports:
 //   renderLedger(cwd)    → string  // LEDGER.md content reconstructed from fragments
 //   renderDecisions(cwd) → string  // DECISIONS.md content with derived # numbering
 //   renderMemory(cwd)    → string  // AUTO-MEMORY.md content with decay computed on-read
+//   renderChecker(cwd)   → string  // CHECKER-MEMORY monolith view (on-demand only)
 //   isStale(cwd)         → { ledger:bool, decisions:bool, memory:bool }
 //   writeAll(cwd)        → { written:[string], skipped:[string] }
 //
 // CLI:
-//   node forge-projection.js --render ledger|decisions|memory [--cwd <dir>]
+//   node forge-projection.js --render ledger|decisions|memory|checker [--cwd <dir>]
 //   node forge-projection.js --stale [--cwd <dir>]
 //   node forge-projection.js --write-all [--cwd <dir>]
 //   node forge-projection.js --help
@@ -30,6 +32,7 @@ const path = require('path');
 const ledgerMod    = require('./forge-ledger');
 const decisionsMod = require('./forge-decisions');
 const memoryMod    = require('./forge-memory');
+const checkerMod   = require('./forge-checker-memory');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -326,6 +329,68 @@ function renderMemory(cwd) {
   return lines.join('\n');
 }
 
+// ── renderChecker ─────────────────────────────────────────────────────────────
+// Reconstructs the CHECKER-MEMORY monolith view from .gsd/checker-memory/*.md fragments.
+// On-demand only (D9) — never called by writeAll, never persisted as a file.
+// Emits two sections so dispatch directives that extract by section name keep working:
+//   ## Verification Patterns  — events where kind === 'verify'
+//   ## Plan Quality Patterns  — events where kind === 'plan'
+function renderChecker(cwd) {
+  const fragments = checkerMod.listFragments(cwd);
+  const lines = ['# Forge Checker Memory', ''];
+  lines.push('> Aggregated checker events from completed milestones. On-demand projection — not persisted.');
+  lines.push('');
+
+  // Accumulate all events from all fragments
+  const allEvents = [];
+  for (const { milestoneId, path: fpath } of fragments) {
+    let frag;
+    try {
+      const text = require('fs').readFileSync(fpath, 'utf8');
+      frag = checkerMod.parseFragment(text);
+    } catch (e) {
+      process.stderr.write(`[forge-projection] warn: skipping checker fragment ${milestoneId}: ${e.message}\n`);
+      continue;
+    }
+    if (Array.isArray(frag.events)) {
+      for (const evt of frag.events) {
+        allEvents.push(evt);
+      }
+    }
+  }
+
+  // Derive stats
+  const stats = checkerMod.projectStats(allEvents);
+  const verifyRows = stats.filter(r => r.kind === 'verify');
+  const planRows   = stats.filter(r => r.kind === 'plan');
+
+  // ## Verification Patterns
+  lines.push('## Verification Patterns');
+  lines.push('');
+  if (verifyRows.length === 0) {
+    lines.push('_No checker events yet._');
+  } else {
+    for (const r of verifyRows) {
+      lines.push(`- **${r.dimension}** (severity:${r.severity}) — count:${r.count}, last_seen:${r.last_seen}`);
+    }
+  }
+  lines.push('');
+
+  // ## Plan Quality Patterns
+  lines.push('## Plan Quality Patterns');
+  lines.push('');
+  if (planRows.length === 0) {
+    lines.push('_No checker events yet._');
+  } else {
+    for (const r of planRows) {
+      lines.push(`- **${r.dimension}** (severity:${r.severity}) — count:${r.count}, last_seen:${r.last_seen}`);
+    }
+  }
+  lines.push('');
+
+  return lines.join('\n');
+}
+
 // ── maxMtime ──────────────────────────────────────────────────────────────────
 // Recursively finds the maximum mtime (ms) of all .md files in a directory.
 // Returns 0 if directory does not exist or is empty.
@@ -430,6 +495,7 @@ module.exports = {
   renderLedger,
   renderDecisions,
   renderMemory,
+  renderChecker,
   isStale,
   writeAll,
 };
@@ -439,7 +505,7 @@ function printUsage() {
   console.log(`Usage: node forge-projection.js <command> [options]
 
 Commands:
-  --render ledger|decisions|memory [--cwd <dir>]
+  --render ledger|decisions|memory|checker [--cwd <dir>]
                           Print reconstructed monolith content to stdout
   --stale [--cwd <dir>]   Print JSON {ledger:bool, decisions:bool, memory:bool}
                           and exit 0 (true = stale)
@@ -478,8 +544,8 @@ function cliMain(argv) {
 
   if (cmd === '--render') {
     const name = argv[1];
-    if (!name || !['ledger', 'decisions', 'memory'].includes(name)) {
-      process.stderr.write('--render requires: ledger | decisions | memory\n');
+    if (!name || !['ledger', 'decisions', 'memory', 'checker'].includes(name)) {
+      process.stderr.write('--render requires: ledger | decisions | memory | checker\n');
       process.exit(2);
     }
     let content;
@@ -487,6 +553,7 @@ function cliMain(argv) {
       if (name === 'ledger')    content = renderLedger(cwd);
       if (name === 'decisions') content = renderDecisions(cwd);
       if (name === 'memory')    content = renderMemory(cwd);
+      if (name === 'checker')   content = renderChecker(cwd);
     } catch (e) {
       process.stderr.write(`${e.message}\n`);
       process.exit(1);
