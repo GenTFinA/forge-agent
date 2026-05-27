@@ -71,7 +71,7 @@ Read if exists: {WORKING_DIR}/.gsd/milestones/{M###}/slices/{S##}/{S##}-CONTEXT.
 
 ## Checker Feedback
 
-Read if exists: {WORKING_DIR}/.gsd/CHECKER-MEMORY.md — extract ## Verification Patterns section only
+Run if .gsd/checker-memory/ exists: node "$FORGE_SCRIPTS_DIR/forge-projection.js" --render checker --cwd "{WORKING_DIR}" — extract ## Verification Patterns section only
 
 ## Project Memory
 
@@ -139,7 +139,7 @@ Read if exists (first 35 lines each): {WORKING_DIR}/.gsd/milestones/{M###}/slice
 
 ## Checker Feedback
 
-Read if exists: {WORKING_DIR}/.gsd/CHECKER-MEMORY.md — extract ## Plan Quality Patterns section only
+Run if .gsd/checker-memory/ exists: node "$FORGE_SCRIPTS_DIR/forge-projection.js" --render checker --cwd "{WORKING_DIR}" — extract ## Plan Quality Patterns section only
 
 ## Project Memory
 
