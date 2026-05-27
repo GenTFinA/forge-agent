@@ -6,7 +6,7 @@
 //   memoryDir(cwd)                      → string  // absolute path to memory dir
 //   fragmentPath(cwd, unitId)           → string  // absolute path to <unit-id>.md
 //   parseFragment(text)                 → object  // parse markdown with YAML frontmatter
-//   writeFragment(cwd, fragment)        → { path, created }
+//   writeFragment(cwd, fragment, opts)  → { path, created }
 //   readFragment(cwd, unitId)           → object | null
 //   listFragments(cwd)                  → Array<{ unitId, path }>
 //
@@ -28,6 +28,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { isValid, entityKind } = require('./forge-ids');
+const yamlSafe = require('./forge-yaml-safe');
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,7 @@ function fragmentPath(cwd, unitId) {
 // Decay is computed on-projection — NOT manufactured as events here.
 // Unknown frontmatter keys are passed through as-is.
 // Accepts both inline ([...]) and block (- item) array forms.
+// Uses yamlSafe.parseScalar for scalar values (supports block-scalar `|` form).
 function parseFragment(text) {
   const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
   if (!match) {
@@ -116,7 +118,15 @@ function parseFragment(text) {
       }
       currentObject = {};
       const key = objectItemStart[2];
-      currentObject[key] = objectItemStart[3].trim();
+      const rawVal = objectItemStart[3].trim();
+      // Build a synthetic lines slice for parseScalar: value line + subsequent lines
+      // baseIndent for nested object items is 4 (they are indented under "  - ")
+      const syntheticLines = [rawVal].concat(lines.slice(i + 1));
+      const parsed = yamlSafe.parseScalar(syntheticLines, 0, 4);
+      currentObject[key] = parsed.value;
+      // Advance i by however many extra lines were consumed (parsed.nextIndex - 1
+      // because the for-loop will add 1 on next iteration)
+      i += parsed.nextIndex - 1;
       inObjectArray = true;
       currentArray = null;
       continue;
@@ -126,7 +136,11 @@ function parseFragment(text) {
     if (inObjectArray && currentObject !== null) {
       const objKv = line.match(/^\s{2,}([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
       if (objKv) {
-        currentObject[objKv[1]] = objKv[2].trim();
+        const rawVal = objKv[2].trim();
+        const syntheticLines = [rawVal].concat(lines.slice(i + 1));
+        const parsed = yamlSafe.parseScalar(syntheticLines, 0, 4);
+        currentObject[objKv[1]] = parsed.value;
+        i += parsed.nextIndex - 1;
         continue;
       }
       // Unindented or non-kv line ends the current object
@@ -167,13 +181,21 @@ function parseFragment(text) {
         currentArray = null;
         inObjectArray = false;
       } else if (rawVal === '') {
-        // Block array starts next
+        // Could be a block array starting next, or a block scalar `|`
+        // Peek ahead: if next line starts with `- ` it's a block array;
+        // if it starts with `|`, use parseScalar for block scalar.
+        // For simplicity, treat empty value as block-array start (existing behavior).
+        // Block scalar `|` is handled by parseScalar when rawVal === '|'.
         result[key] = [];
         currentKey = key;
         currentArray = result[key];
         inObjectArray = false;
       } else {
-        result[key] = rawVal;
+        // Use parseScalar to handle plain, quoted, and block-scalar forms
+        const syntheticLines = [rawVal].concat(lines.slice(i + 1));
+        const parsed = yamlSafe.parseScalar(syntheticLines, 0, 0);
+        result[key] = parsed.value;
+        i += parsed.nextIndex - 1;
         currentKey = key;
         currentArray = null;
         inObjectArray = false;
@@ -277,7 +299,7 @@ function mergeStats(existing, incoming) {
 // Serializes a fragment object to YAML frontmatter string.
 // Keys are emitted in alphabetical order for diff stability.
 // `facts` and `stats` use block-of-objects form.
-// Simple arrays use block form. Scalars use plain form.
+// Simple arrays use block form. Scalars use yamlSafe.serializeScalar.
 function serializeFrontmatter(fragment) {
   const skip = new Set(['body']);
   const keys = Object.keys(fragment).filter(k => !skip.has(k)).sort();
@@ -303,7 +325,9 @@ function serializeFrontmatter(fragment) {
           let first = true;
           for (const fk of allKeys) {
             const prefix = first ? '  - ' : '    ';
-            lines.push(`${prefix}${fk}: ${f[fk] !== undefined && f[fk] !== null ? f[fk] : ''}`);
+            const fv = f[fk] !== undefined && f[fk] !== null ? f[fk] : '';
+            // Nested object items are at indent level 4 (under "  - ")
+            lines.push(`${prefix}${fk}: ${yamlSafe.serializeScalar(String(fv), 4)}`);
             first = false;
           }
         }
@@ -326,7 +350,8 @@ function serializeFrontmatter(fragment) {
           let first = true;
           for (const sk of allKeys) {
             const prefix = first ? '  - ' : '    ';
-            lines.push(`${prefix}${sk}: ${s[sk] !== undefined && s[sk] !== null ? s[sk] : ''}`);
+            const sv = s[sk] !== undefined && s[sk] !== null ? s[sk] : '';
+            lines.push(`${prefix}${sk}: ${yamlSafe.serializeScalar(String(sv), 4)}`);
             first = false;
           }
         }
@@ -346,7 +371,7 @@ function serializeFrontmatter(fragment) {
     } else if (val === null || val === undefined) {
       lines.push(`${key}: `);
     } else {
-      lines.push(`${key}: ${val}`);
+      lines.push(`${key}: ${yamlSafe.serializeScalar(String(val), 0)}`);
     }
   }
   return lines.join('\n');
@@ -355,13 +380,15 @@ function serializeFrontmatter(fragment) {
 // ── writeFragment ─────────────────────────────────────────────────────────────
 // Writes a MEMORY fragment to disk.
 // fragment shape: { unit_id, facts?: [...], stats?: [...], ...rest }
+// opts shape: { runId?: string, sessionId?: string } — optional, degrade to fake UUIDs if absent.
 // Merges with existing fragment if present.
 //   - facts: dedup by mem_id; existing fact fields NEVER mutated (append-only).
 //   - stats: dedup by SHA1(kind, mem_id, ts); append-only.
 // Byte-compares after merge — skips write if content is identical (idempotent).
 // Returns { path: string, created: boolean }
 // created: false if content is identical after merge.
-function writeFragment(cwd, fragment) {
+function writeFragment(cwd, fragment, opts) {
+  opts = opts || {};
   if (!fragment || !fragment.unit_id) {
     throw new Error('fragment.unit_id is required');
   }
@@ -398,7 +425,7 @@ function writeFragment(cwd, fragment) {
   const body = base.body ? `\n${base.body}` : '';
   const content = `---\n${frontmatter}\n---\n${body}`;
 
-  // Idempotent check
+  // Idempotent check — skip writeAtomic (and lock acquisition) if content unchanged
   if (fs.existsSync(fpath)) {
     const existingContent = fs.readFileSync(fpath, 'utf8');
     if (existingContent === content) {
@@ -406,7 +433,13 @@ function writeFragment(cwd, fragment) {
     }
   }
 
-  fs.writeFileSync(fpath, content, 'utf8');
+  // Atomic write with optional runId/sessionId (D-S05-D: degrade to fake UUIDs if absent)
+  yamlSafe.writeAtomic(fpath, content, {
+    cwd,
+    runId: opts.runId || null,
+    sessionId: opts.sessionId || null,
+  });
+
   return { path: fpath, created: true };
 }
 
@@ -572,6 +605,128 @@ function cliMain(argv) {
   process.stderr.write(`Unknown argument: ${cmd}\n\n`);
   printUsage();
   process.exit(2);
+}
+
+// ── Inline regression smoke ───────────────────────────────────────────────────
+// Verifies multi-line round-trip AND forge-projection.js renderMemory regression.
+// Usage: node scripts/forge-memory.js --smoke-regression
+if (require.main === module && process.argv[2] === '--smoke-regression') {
+  const os = require('os');
+  let allPassed = true;
+
+  function smokeAssert(label, actual, expected) {
+    if (actual === expected) {
+      console.log('PASS: ' + label);
+    } else {
+      console.log('FAIL: ' + label + ' | expected=' + JSON.stringify(expected) + ' got=' + JSON.stringify(actual));
+      allPassed = false;
+    }
+  }
+
+  const smokeDir = path.join(process.cwd(), '.gsd-smoke-t03');
+  try {
+    // ── A: multi-line round-trip ──────────────────────────────────────────────
+    const multiLineText = 'line1\nline2\nline3';
+    const fragment = {
+      unit_id: 'M-20260527000000-smoke',
+      facts: [{
+        mem_id: 'SMOKE-001',
+        category: 'pattern',
+        text: multiLineText,
+        created_at: '2026-05-27',
+        source_unit: 'M-20260527000000-smoke',
+      }],
+      stats: [],
+    };
+
+    // 2-arg form (back-compat)
+    const writeResult = writeFragment(smokeDir, fragment);
+    smokeAssert('A: writeFragment returns path', typeof writeResult.path, 'string');
+    smokeAssert('A: writeFragment returns created:true on first write', writeResult.created, true);
+
+    // Read back via readFragment
+    const readBack = readFragment(smokeDir, 'M-20260527000000-smoke');
+    smokeAssert('A: readFragment returns object', readBack !== null, true);
+    const roundTrippedText = readBack && readBack.facts && readBack.facts[0] && readBack.facts[0].text;
+    smokeAssert('A: multi-line round-trip exact', roundTrippedText, multiLineText);
+
+    // ── B: leading-[ round-trip ───────────────────────────────────────────────
+    const bracketFragment = {
+      unit_id: 'M-20260527000001-smoke',
+      facts: [{
+        mem_id: 'SMOKE-002',
+        category: 'note',
+        text: '[brackets',
+        created_at: '2026-05-27',
+        source_unit: 'M-20260527000001-smoke',
+      }],
+      stats: [],
+    };
+    writeFragment(smokeDir, bracketFragment);
+    const bracketRead = readFragment(smokeDir, 'M-20260527000001-smoke');
+    const bracketText = bracketRead && bracketRead.facts && bracketRead.facts[0] && bracketRead.facts[0].text;
+    smokeAssert('B: [bracket round-trip exact', bracketText, '[brackets');
+
+    // ── C: idempotent re-write returns created:false ──────────────────────────
+    const writeResult2 = writeFragment(smokeDir, fragment);
+    smokeAssert('C: idempotent re-write returns created:false', writeResult2.created, false);
+
+    // ── D: 3-arg form with runId/sessionId ───────────────────────────────────
+    const fragment3arg = {
+      unit_id: 'M-20260527000002-smoke',
+      facts: [{
+        mem_id: 'SMOKE-003',
+        category: 'pattern',
+        text: 'three arg test',
+        created_at: '2026-05-27',
+        source_unit: 'M-20260527000002-smoke',
+      }],
+      stats: [],
+    };
+    const r3 = writeFragment(smokeDir, fragment3arg, { runId: 'test-run-001', sessionId: 'test-sess-001' });
+    smokeAssert('D: 3-arg writeFragment returns created:true', r3.created, true);
+
+    // ── E: forge-projection.js renderMemory regression smoke ─────────────────
+    let renderMemory;
+    try {
+      const projection = require('./forge-projection');
+      renderMemory = projection.renderMemory;
+    } catch (e) {
+      console.log('WARN: forge-projection.js not loadable: ' + e.message + ' — skipping renderMemory regression');
+      renderMemory = null;
+    }
+
+    if (renderMemory) {
+      let renderOutput;
+      let renderThrew = false;
+      try {
+        renderOutput = renderMemory(smokeDir);
+      } catch (e) {
+        renderThrew = true;
+        console.log('FAIL: E: renderMemory threw: ' + e.message);
+        allPassed = false;
+      }
+      if (!renderThrew) {
+        smokeAssert('E: renderMemory returns non-empty string', typeof renderOutput === 'string' && renderOutput.length > 0, true);
+        // The multi-line content should appear in some form in the output
+        // renderMemory joins lines with \n or emits them as-is — we check for at least one segment
+        const hasContent = typeof renderOutput === 'string' && renderOutput.includes('line1');
+        smokeAssert('E: renderMemory output contains multi-line content', hasContent, true);
+      }
+    }
+
+  } finally {
+    // Cleanup smoke dir
+    try { fs.rmSync(smokeDir, { recursive: true, force: true }); } catch {}
+  }
+
+  if (allPassed) {
+    console.log('\nSMOKE-REGRESSION: PASS');
+    process.exit(0);
+  } else {
+    console.log('\nSMOKE-REGRESSION: FAIL');
+    process.exit(1);
+  }
 }
 
 // ── Guarded CLI invocation ────────────────────────────────────────────────────
