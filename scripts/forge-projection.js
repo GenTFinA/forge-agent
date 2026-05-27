@@ -74,6 +74,10 @@ function renderLedger(cwd) {
     if (frag.completed_at) lines.push(`Completed: ${frag.completed_at}`);
     lines.push('');
 
+    const hasStructured = (frag.slices && frag.slices.length > 0)
+      || (frag.key_files && frag.key_files.length > 0)
+      || (frag.key_decisions && frag.key_decisions.length > 0);
+
     if (frag.slices && frag.slices.length > 0) {
       lines.push(`**Slices:** ${frag.slices.join(', ')}`);
     }
@@ -90,7 +94,9 @@ function renderLedger(cwd) {
       }
     }
 
-    if (frag.body) {
+    // Only emit body when no structured fields were parsed — body is derived
+    // from the raw block and duplicates structured fields when they are present.
+    if (!hasStructured && frag.body) {
       lines.push('');
       lines.push(frag.body);
     }
