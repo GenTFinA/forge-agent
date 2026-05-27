@@ -209,6 +209,13 @@ function serializeMemories(entries, header) {
   return out.join('\n').replace(/\n+$/, '\n');
 }
 
+/**
+ * @deprecated Since M-20260527131143 (PR #7 feedback fix). The mergeMilestone path no longer
+ * invokes this — workers read fragments directly via forge-memory.js --list/--read (D9).
+ * Still used by mergeTask (kind=task lifecycle) and standalone CLI use.
+ * The monolith .gsd/AUTO-MEMORY.md is now a human-readable projection only,
+ * refreshable via /forge-doctor --regen-projection.
+ */
 function mergeAutoMemory(cwd, sourcePath) {
   const sourceText = safeRead(sourcePath);
   if (!sourceText) return { merged: 0, dropped: 0 };
@@ -391,7 +398,7 @@ async function mergeMilestone(cwd, milestoneId, opts) {
 
   const sources = {
     // decisions removed — fragment store (.gsd/decisions/<unit-id>.md) is now source of truth (M001/S03)
-    memories:  perMilestonePath(cwd, milestoneId, 'AUTO-MEMORY.md'),
+    // memories removed — fragment store (.gsd/memory/) is now source of truth (M-20260527131143/S02)
     // checker removed — fragment store (.gsd/checker-memory/) is now source of truth (M001/S04)
     events:    perMilestonePath(cwd, milestoneId, 'events.jsonl'),
   };
@@ -399,7 +406,7 @@ async function mergeMilestone(cwd, milestoneId, opts) {
   const tasks = [
     // DECISIONS.md task removed — decisions are now in fragment store; global rebuild happens in complete-milestone (S05)
     // CHECKER-MEMORY.md task removed — checker is now a fragment store; see mergeCheckerMemory @deprecated (M001/S04)
-    { name: 'AUTO-MEMORY.md',    run: () => mergeAutoMemory(cwd, sources.memories),     resultKey: 'memories',  getCount: r => r.merged },
+    // AUTO-MEMORY.md task removed — fragment store is now source of truth; function marked @deprecated (M-20260527131143/S02)
     { name: 'events.jsonl',      run: () => mergeEvents(cwd, sources.events),           resultKey: 'events',    getCount: r => r.merged },
   ];
 
