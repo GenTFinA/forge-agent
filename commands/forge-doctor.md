@@ -13,7 +13,7 @@ $ARGUMENTS
 
 ## Step 1: Parse flags
 
-Verifique se `--fix` está presente em `$ARGUMENTS`:
+Verifique se `--fix` ou `--regen-projection` estão presentes em `$ARGUMENTS`:
 
 ```bash
 # Exemplo de detecção (lógica interna — não exibir ao usuário)
@@ -21,6 +21,43 @@ Verifique se `--fix` está presente em `$ARGUMENTS`:
 ```
 
 Guarde internamente: `FIX_MODE=true` se `--fix` for encontrado, caso contrário `FIX_MODE=false`.
+Se `--regen-projection` for encontrado: execute o **Step 1a** imediatamente e interrompa o fluxo normal.
+
+---
+
+## Step 1a: --regen-projection (early exit)
+
+Execute este passo **somente se** `--regen-projection` estiver em `$ARGUMENTS`. Não executa as camadas Layer 1–3.
+
+Regenera as projeções legíveis (AUTO-MEMORY.md, DECISIONS.md, LEDGER.md, CHECKER-MEMORY.md) a partir do fragment store. Use quando quiser ler o monolito consolidado — workers já consomem os fragmentos diretamente (D9).
+
+```bash
+node scripts/forge-doctor.js --regen-projection
+```
+
+**Saída esperada (sucesso):**
+```
+Monoliths regenerated. (.gsd/{AUTO-MEMORY,DECISIONS,LEDGER,CHECKER-MEMORY}.md refreshed from fragments.)
+```
+
+Exit code `0` = sucesso, `1` = falha (ver stderr).
+
+Exiba ao usuário:
+```
+Forge Doctor — Regen Projection
+================================
+
+  ✓ Monoliths regenerated from fragment store.
+    .gsd/AUTO-MEMORY.md, .gsd/DECISIONS.md, .gsd/LEDGER.md, .gsd/CHECKER-MEMORY.md
+    (workers já consomem fragmentos diretamente — este monolito é para leitura humana)
+```
+
+Se exit code `1`, exiba:
+```
+  ✗ Falha ao regenerar monolitos. Verifique o stderr acima.
+```
+
+Interrompa aqui — não continue para Step 2.
 
 ---
 

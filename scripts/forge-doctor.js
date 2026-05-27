@@ -11,6 +11,7 @@
 //   node forge-doctor.js --check projection-versioned [--cwd <dir>]
 //   node forge-doctor.js --check all [--cwd <dir>]
 //   node forge-doctor.js --fix [--cwd <dir>]
+//   node forge-doctor.js --regen-projection [--cwd <dir>]
 //   node forge-doctor.js --help
 //
 // Exit codes: 0 all checks pass, 1 check failed, 2 bad arguments.
@@ -208,6 +209,7 @@ function cliMain() {
 Flags:
   --check <name> [--cwd <dir>]   run check: schema | projection-versioned | all
   --fix [--cwd <dir>]            write SCHEMA-VERSION if missing; suggest ignore fixes
+  --regen-projection [--cwd <dir>]  regenerate monolith projections from fragment store
   --cwd <dir>                    working directory (default: process.cwd())
   --help                         show this help
 
@@ -257,6 +259,21 @@ Exit codes:
       for (const f of fixed) process.stdout.write(`  ${f}\n`);
     }
     process.exit(0);
+    return;
+  }
+
+  if (args['regen-projection']) {
+    const projectionScript = path.resolve(__dirname, 'forge-projection.js');
+    const projArgs = ['--write-all'];
+    if (cwdArg !== process.cwd()) projArgs.push('--cwd', cwdArg);
+    try {
+      execFileSync(process.execPath, [projectionScript].concat(projArgs), { stdio: 'inherit' });
+      process.stdout.write('Monoliths regenerated. (.gsd/{AUTO-MEMORY,DECISIONS,LEDGER,CHECKER-MEMORY}.md refreshed from fragments.)\n');
+      process.exit(0);
+    } catch (err) {
+      process.stderr.write('forge-doctor --regen-projection: forge-projection.js failed (see above).\n');
+      process.exit(1);
+    }
     return;
   }
 
