@@ -141,10 +141,15 @@ function migrateStore(cwd, store, opts) {
     return result;
   }
 
-  // Step 2: migrate
+  // Step 2: migrate — pass bakPath as source when bakContent is available so the
+  // migrator reads from the .bak file (original content) instead of the now-renamed path.
   let migrateResult;
   try {
-    migrateResult = store.migrate(cwd, { dryRun });
+    const migrateOpts = { dryRun };
+    if (bakContent !== null) {
+      migrateOpts.source = path.join(cwd, store.bakRel);
+    }
+    migrateResult = store.migrate(cwd, migrateOpts);
   } catch (e) {
     result.error = `migrate failed: ${e.message}`;
     return result;
