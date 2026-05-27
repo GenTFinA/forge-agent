@@ -418,3 +418,9 @@ Somente o check de schema do executor (S01, componente #1) é enforcing em M003.
 - `file_audit.ignore_list` — customize adicionando/removendo globs. Não muda a postura advisory — só o que é flagged.
 
 Antes de ativar qualquer um destes em um projeto de produção: rode ≥ 1 milestone completo em modo advisory para medir a taxa de falsos positivos das heurísticas (regex stub, depth-2 walker, dimension scoring). M003 explicitamente não recomenda flipping defaults em v1.
+
+## Estado atual
+
+- **Milestone ativo:** — (M-20260527131143-fix-m001-pr-7-feedback concluído)
+- **Fase:** idle — M-20260527131143-fix-m001-pr-7-feedback encerrado com sucesso.
+- **Próxima ação:** Executar `/forge-new-milestone <descrição>` para iniciar o próximo milestone.
