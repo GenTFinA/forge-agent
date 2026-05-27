@@ -638,12 +638,33 @@ Store the returned `taskId` as `current_task_id`. Then immediately mark it as in
 TaskUpdate({ taskId: current_task_id, status: "in_progress" })
 ```
 
-**Selective memory injection** — before building the worker prompt, filter `ALL_MEMORIES` to the entries most relevant to this unit:
-- For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include memories whose description shares ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries.
-- For `plan-slice` / `research-slice`: include `architecture` and `pattern` memories related to the milestone scope. Cap at 8 entries.
-- For other unit types: include top-5 entries by confidence score.
-- If ALL_MEMORIES is empty or no entries match: inject `(none)`.
+**Selective memory injection** — before building the worker prompt, source memory entries from the fragment store via the `forge-memory.js` API (D9):
+
+```bash
+# 1. List all available fragment unit IDs
+_frag_list=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --list --cwd "$WORKING_DIR" 2>/dev/null || echo "[]")
+```
+
+If `_frag_list` is a non-empty JSON array (fragment store is populated):
+- For each `unit_id` in the list, read its fragment:
+  ```bash
+  _frag=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --read <unit_id> --cwd "$WORKING_DIR" 2>/dev/null)
+  ```
+  Each fragment has `facts[]`, `category`, `confidence`, `hits`.
+- Apply filter to `facts[]` entries using the same selection logic:
+  - For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include facts that share ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries total across all fragments.
+  - For `plan-slice` / `research-slice`: include facts from fragments with `category` = `architecture` or `pattern` related to the milestone scope. Cap at 8 entries.
+  - For other unit types: include top-5 facts by fragment `confidence` score.
+- Collect matching facts into `RELEVANT_MEMORIES` string (same shape as before — one bullet per fact).
+
+If `_frag_list` is `[]` or errors (pre-fragment-store workspace — fragment store not yet populated):
+- Fall back to `ALL_MEMORIES` (loaded from `.gsd/AUTO-MEMORY.md` at step 5 of Load context) using the same filter logic above.
+
+If no entries match in either path: set `RELEVANT_MEMORIES` to `(none)`.
+
 Store as `RELEVANT_MEMORIES` and use in the worker prompt `## Project Memory` section instead of the raw full file.
+
+> For human-readable consolidation of the fragment store into `.gsd/AUTO-MEMORY.md`, run `/forge-doctor --regen-projection` (uses `forge-memory.js --write-all` / `forge-projection` internally). The monolith is no longer the runtime source of truth (D9).
 
 **Heartbeat — record active worker** before dispatching (M005+: writes via forge-runs.js when multi-run, legacy auto-mode.json fallback):
 ```bash
