@@ -95,7 +95,30 @@ Write (or update) `.gsd/milestones/{M###}/{M###}-CONTEXT.md` or `slices/{S##}/{S
 {ideas for later milestones/slices}
 ```
 
-Append significant decisions to `.gsd/DECISIONS.md` using **`Edit` only** — never `Write` (it replaces the whole file; a PreToolUse hook blocks `Write` on this path). `Read` the file in full first (paginate if large), then `Edit` with `old_string` = current last row and `new_string` = that row + newline + your new row(s). Bash alternative: `cat >> .gsd/DECISIONS.md << 'EOF'` (never `>`).
+### Append significant decisions to the fragment store
+
+For each significant decision made during this discuss unit, pipe a JSON fragment to `forge-decisions.js --write`:
+
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+echo '{
+  "unit_id": "{TARGET_ID}",
+  "decisions": [
+    {
+      "when": "YYYY-MM-DD",
+      "scope": "milestone|slice",
+      "decision": "Short label for this decision",
+      "choice": "What was chosen",
+      "rationale": "Why this was chosen",
+      "revisable": "yes|no"
+    }
+  ]
+}' | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd .
+```
+
+- `unit_id` is `{TARGET_ID}` — for slice discuss, pass the **parent milestone ID** (e.g. `M001`, `M-20260522101500-pagamentos`); for milestone discuss, pass the milestone ID directly. The CLI writes to `.gsd/decisions/<unit-id>.md`.
+- Multiple decisions can be batched in a single invocation by adding entries to the `decisions` array.
+- Do NOT append directly to `.gsd/DECISIONS.md` or any `M###-DECISIONS.md` file — the CLI is the uniform write path. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-completer, step 5).
 
 Read `.gsd/STATE.md`, then update it — set phase to `plan` (ready to plan this milestone/slice).
 
