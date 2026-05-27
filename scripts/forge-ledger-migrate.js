@@ -109,14 +109,17 @@ function splitBulletOrComma(str) {
 
 // ── migrate ───────────────────────────────────────────────────────────────────
 // Main migration function.
-// opts: { dryRun: boolean }
+// opts: { dryRun: boolean, source: string }
+//   source — override the default LEDGER.md path (opts.source wins over default)
 // Returns: { status, written, skipped, would_write }
 //   status: 'no-ledger' | 'done'
 function migrate(cwd, opts) {
   opts = opts || {};
   const dryRun = Boolean(opts.dryRun);
 
-  const ledgerPath = path.join(cwd || process.cwd(), '.gsd', 'LEDGER.md');
+  const ledgerPath = opts.source
+    ? opts.source
+    : path.join(cwd || process.cwd(), '.gsd', 'LEDGER.md');
 
   if (!fs.existsSync(ledgerPath)) {
     return { status: 'no-ledger', written: 0, skipped: 0, would_write: 0 };
@@ -183,6 +186,7 @@ function printUsage() {
 Options:
   --dry-run          Print what would be written without writing anything
   --cwd <dir>        Working directory (default: process.cwd())
+  --source <path>    Read the LEDGER monolith from this path instead of .gsd/LEDGER.md
   --help, -h         Show this help and exit
 
 Exit codes:
@@ -193,12 +197,14 @@ Examples:
   node forge-ledger-migrate.js
   node forge-ledger-migrate.js --dry-run
   node forge-ledger-migrate.js --cwd /path/to/project
-  node forge-ledger-migrate.js --dry-run --cwd /path/to/project`);
+  node forge-ledger-migrate.js --dry-run --cwd /path/to/project
+  node forge-ledger-migrate.js --source /path/to/LEDGER.md.bak`);
 }
 
 function cliMain(argv) {
   let cwd = process.cwd();
   let dryRun = false;
+  let source = null;
 
   // Parse --cwd
   const cwdIdx = argv.indexOf('--cwd');
@@ -210,6 +216,18 @@ function cliMain(argv) {
     }
     cwd = cwdVal;
     argv = argv.filter((_, i) => i !== cwdIdx && i !== cwdIdx + 1);
+  }
+
+  // Parse --source
+  const sourceIdx = argv.indexOf('--source');
+  if (sourceIdx !== -1) {
+    const sourceVal = argv[sourceIdx + 1];
+    if (!sourceVal || sourceVal.startsWith('-')) {
+      process.stderr.write('--source requires a file path argument\n');
+      process.exit(2);
+    }
+    source = sourceVal;
+    argv = argv.filter((_, i) => i !== sourceIdx && i !== sourceIdx + 1);
   }
 
   for (const arg of argv) {
@@ -225,7 +243,7 @@ function cliMain(argv) {
     }
   }
 
-  const summary = migrate(cwd, { dryRun });
+  const summary = migrate(cwd, { dryRun, source });
 
   if (summary.status === 'no-ledger') {
     console.log(JSON.stringify({ status: 'no-ledger', message: 'nothing to migrate — .gsd/LEDGER.md not found', written: 0, skipped: 0, would_write: 0 }));

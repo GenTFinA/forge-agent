@@ -366,7 +366,10 @@ function writeOrphanBucket(cwd, orphanEntries, dryRun) {
 
 // ── migrate ───────────────────────────────────────────────────────────────────
 // Main migration function.
-// opts: { dryRun, skipMemory, skipChecker, verify }
+// opts: { dryRun, skipMemory, skipChecker, verify, source }
+//   source — override the AUTO-MEMORY.md source path (opts.source wins over default).
+//            CHECKER-MEMORY.md source is unaffected. If --skip-memory is also set,
+//            source is ignored (skipMemory wins).
 // Returns: { status, memory: {...}, checker: {...}, warnings }
 function migrate(cwd, opts) {
   opts = opts || {};
@@ -384,7 +387,9 @@ function migrate(cwd, opts) {
 
   // ── AUTO-MEMORY migration ──────────────────────────────────────────────────
   if (!skipMemory) {
-    const autoMemoryPath = path.join(effectiveCwd, '.gsd', 'AUTO-MEMORY.md');
+    const autoMemoryPath = opts.source
+      ? opts.source
+      : path.join(effectiveCwd, '.gsd', 'AUTO-MEMORY.md');
 
     if (!fs.existsSync(autoMemoryPath)) {
       allWarnings.push('AUTO-MEMORY.md not found; skipping memory migration');
@@ -580,7 +585,9 @@ function printUsage() {
 Options:
   --dry-run          Print what would be written without writing anything
   --cwd <dir>        Working directory (default: process.cwd())
-  --skip-memory      Skip AUTO-MEMORY.md migration
+  --source <path>    Read AUTO-MEMORY monolith from this path instead of .gsd/AUTO-MEMORY.md
+                     (CHECKER-MEMORY.md source is unaffected; --skip-memory overrides --source)
+  --skip-memory      Skip AUTO-MEMORY.md migration (takes precedence over --source)
   --skip-checker     Skip CHECKER-MEMORY.md migration
   --verify           After writes, run advisory byte-compare verify (best-effort; S05 is canonical)
   --help, -h         Show this help and exit
@@ -595,7 +602,8 @@ Examples:
   node forge-memory-migrate.js --cwd /path/to/project
   node forge-memory-migrate.js --dry-run --cwd /path/to/project
   node forge-memory-migrate.js --skip-checker
-  node forge-memory-migrate.js --skip-memory`);
+  node forge-memory-migrate.js --skip-memory
+  node forge-memory-migrate.js --source /path/to/AUTO-MEMORY.md.bak`);
 }
 
 function cliMain(argv) {
@@ -604,6 +612,7 @@ function cliMain(argv) {
   let skipMemory = false;
   let skipChecker = false;
   let verify = false;
+  let source = null;
 
   // Parse --cwd
   const cwdIdx = argv.indexOf('--cwd');
@@ -615,6 +624,18 @@ function cliMain(argv) {
     }
     cwd = cwdVal;
     argv = argv.filter((_, i) => i !== cwdIdx && i !== cwdIdx + 1);
+  }
+
+  // Parse --source
+  const sourceIdx = argv.indexOf('--source');
+  if (sourceIdx !== -1) {
+    const sourceVal = argv[sourceIdx + 1];
+    if (!sourceVal || sourceVal.startsWith('-')) {
+      process.stderr.write('--source requires a file path argument\n');
+      process.exit(2);
+    }
+    source = sourceVal;
+    argv = argv.filter((_, i) => i !== sourceIdx && i !== sourceIdx + 1);
   }
 
   for (const arg of argv) {
@@ -636,7 +657,7 @@ function cliMain(argv) {
     }
   }
 
-  const summary = migrate(cwd, { dryRun, skipMemory, skipChecker, verify });
+  const summary = migrate(cwd, { dryRun, skipMemory, skipChecker, verify, source });
 
   const output = {
     status: dryRun ? 'would_run' : summary.status,

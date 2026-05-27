@@ -210,7 +210,9 @@ function groupByScope(rows) {
 
 // ── migrate ───────────────────────────────────────────────────────────────────
 // Main migration function.
-// opts: { dryRun: boolean }
+// opts: { dryRun: boolean, source: string }
+//   source — override the default DECISIONS.md path (opts.source wins over default).
+//            Per-milestone *-DECISIONS.md walking is unaffected.
 // Returns: { status, written, skipped, would_write, warnings }
 //   status: 'no-decisions' | 'done' | 'idempotent'
 function migrate(cwd, opts) {
@@ -222,8 +224,10 @@ function migrate(cwd, opts) {
   const allWarnings = [];
   let anySourceFound = false;
 
-  // ── Read global .gsd/DECISIONS.md ──────────────────────────────────────────
-  const globalPath = path.join(effectiveCwd, '.gsd', 'DECISIONS.md');
+  // ── Read global .gsd/DECISIONS.md (or --source override) ──────────────────
+  const globalPath = opts.source
+    ? opts.source
+    : path.join(effectiveCwd, '.gsd', 'DECISIONS.md');
   if (fs.existsSync(globalPath)) {
     anySourceFound = true;
     let text;
@@ -392,6 +396,8 @@ function printUsage() {
 Options:
   --dry-run          Print what would be written without writing anything
   --cwd <dir>        Working directory (default: process.cwd())
+  --source <path>    Read the global DECISIONS monolith from this path instead of .gsd/DECISIONS.md
+                     (per-milestone *-DECISIONS.md files are still discovered normally)
   --help, -h         Show this help and exit
 
 Exit codes:
@@ -402,12 +408,14 @@ Examples:
   node forge-decisions-migrate.js
   node forge-decisions-migrate.js --dry-run
   node forge-decisions-migrate.js --cwd /path/to/project
-  node forge-decisions-migrate.js --dry-run --cwd /path/to/project`);
+  node forge-decisions-migrate.js --dry-run --cwd /path/to/project
+  node forge-decisions-migrate.js --source /path/to/DECISIONS.md.bak`);
 }
 
 function cliMain(argv) {
   let cwd = process.cwd();
   let dryRun = false;
+  let source = null;
 
   // Parse --cwd
   const cwdIdx = argv.indexOf('--cwd');
@@ -419,6 +427,18 @@ function cliMain(argv) {
     }
     cwd = cwdVal;
     argv = argv.filter((_, i) => i !== cwdIdx && i !== cwdIdx + 1);
+  }
+
+  // Parse --source
+  const sourceIdx = argv.indexOf('--source');
+  if (sourceIdx !== -1) {
+    const sourceVal = argv[sourceIdx + 1];
+    if (!sourceVal || sourceVal.startsWith('-')) {
+      process.stderr.write('--source requires a file path argument\n');
+      process.exit(2);
+    }
+    source = sourceVal;
+    argv = argv.filter((_, i) => i !== sourceIdx && i !== sourceIdx + 1);
   }
 
   for (const arg of argv) {
@@ -434,7 +454,7 @@ function cliMain(argv) {
     }
   }
 
-  const summary = migrate(cwd, { dryRun });
+  const summary = migrate(cwd, { dryRun, source });
 
   if (summary.status === 'no-decisions') {
     console.log(JSON.stringify({
