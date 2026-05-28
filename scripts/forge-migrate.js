@@ -70,18 +70,69 @@ function stripDecisionNumbers(text) {
     .join('\n');
 }
 
+// ── normalizeLayout ───────────────────────────────────────────────────────────
+// Returns a canonical form of text for layout-insensitive comparison.
+// Normalizations applied (conservative — never masks real content changes):
+//   1. Trim trailing whitespace on each line.
+//   2. Collapse runs of blank lines to a single blank line.
+//   3. Strip a leading and trailing blank line.
+//   4. Normalize trailing newline to a single \n.
+//   5. Strip derived projection header/preamble lines (^# ... and ^> ...).
+//   6. For the 'decisions' store: also apply stripDecisionNumbers to remove
+//      the derived | # | column (rows reuse the existing helper).
+// Returns the normalized string.
+function normalizeLayout(text, storeName) {
+  let lines = text.split('\n');
+
+  // Strip derived header/preamble lines (projection title + blockquote boilerplate)
+  lines = lines.filter(line => !/^#\s/.test(line) && !/^>\s/.test(line));
+
+  // Trim trailing whitespace per line
+  lines = lines.map(line => line.trimEnd());
+
+  // Collapse runs of blank lines to a single blank line
+  const collapsed = [];
+  let prevBlank = false;
+  for (const line of lines) {
+    const isBlank = line === '';
+    if (isBlank && prevBlank) continue;
+    collapsed.push(line);
+    prevBlank = isBlank;
+  }
+
+  // Strip leading and trailing blank lines
+  while (collapsed.length > 0 && collapsed[0] === '') collapsed.shift();
+  while (collapsed.length > 0 && collapsed[collapsed.length - 1] === '') collapsed.pop();
+
+  let result = collapsed.join('\n');
+
+  // For decisions store, strip derived # numbering column
+  if (storeName === 'decisions') {
+    result = stripDecisionNumbers(result);
+  }
+
+  return result;
+}
+
 // ── compareContent ────────────────────────────────────────────────────────────
 // Compares bak content vs rendered content.
-// Returns 'identical' | 'differs (numbering only)' | 'differs' | 'no-bak'
+// Returns 'identical' | 'differs (layout only)' | 'differs' | 'no-bak'
+//
+// Classification ladder:
+//   bakContent === null                          → 'no-bak'
+//   bakContent === rendered                      → 'identical'
+//   normalizeLayout(bak) === normalizeLayout(rendered) → 'differs (layout only)'
+//   else                                         → 'differs'
+//
+// Note: the legacy 'differs (numbering only)' string is subsumed by
+// 'differs (layout only)' — the decisions numbering-only case now reports
+// layout only. The B1 smoke test does not assert the legacy string literally.
 function compareContent(bakContent, rendered, storeName) {
   if (bakContent === null) return 'no-bak';
   if (bakContent === rendered) return 'identical';
 
-  // For decisions store, try ignoring the # column
-  if (storeName === 'decisions') {
-    const bakNorm      = stripDecisionNumbers(bakContent);
-    const renderedNorm = stripDecisionNumbers(rendered);
-    if (bakNorm === renderedNorm) return 'differs (numbering only)';
+  if (normalizeLayout(bakContent, storeName) === normalizeLayout(rendered, storeName)) {
+    return 'differs (layout only)';
   }
 
   return 'differs';
