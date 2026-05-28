@@ -249,7 +249,12 @@ thinking: adaptive
 Score clarity (scope/acceptance/tech/dependencies/risk). Ask about dimensions below 70.
 Write {TASK_ID}-CONTEXT.md to .gsd/tasks/{TASK_ID}/ with sections:
   ## Decisions, ## Agent's Discretion, ## Open Questions, ## Out of Scope
-Append significant decisions to .gsd/DECISIONS.md using **Edit only** — never Write (replaces whole file; PreToolUse hook blocks Write here). Read the file in full first (paginate if large), then Edit with old_string = current last row and new_string = that row + newline + new row(s). Bash: cat >> file << 'EOF' (never >).
+Append significant decisions to the **fragment store** via `forge-decisions.js --write` (stdin JSON) — do NOT write to `.gsd/DECISIONS.md` directly. Use:
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+printf '%s' "$key_decisions_json" | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "$WORKING_DIR"
+```
+Where `key_decisions_json` is `{ "unit_id": "{TASK_ID}", "decisions": [{when, scope, decision, choice, rationale, revisable}, ...] }`. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-merger).
 Return ---GSD-WORKER-RESULT---.
 ```
 
