@@ -189,6 +189,45 @@ function renderDecisions(cwd) {
   return lines.join('\n');
 }
 
+// ── parseOrphanMemory ─────────────────────────────────────────────────────────
+// Parses the legacy-orphan.md block format written by writeOrphanBucket.
+// Each entry is a `## [<mem_id>] <category>` header followed by `- key: value` lines.
+// Returns an array of factMap-compatible entries:
+//   { fact: { mem_id, category, text, source_unit }, hits, confidence, lastAccessTs, pruned, promoted }
+function parseOrphanMemory(text) {
+  const entries = [];
+  // Split on ## [ headers; each part after the first (preamble) is one entry
+  const blocks = text.split(/\n(?=## \[)/);
+  for (const block of blocks) {
+    const headerMatch = block.match(/^## \[([^\]]+)\]\s*(.*)/);
+    if (!headerMatch) continue;
+    const mem_id   = headerMatch[1].trim();
+    const category = headerMatch[2].trim() || 'unknown';
+
+    const get = (key) => {
+      const m = block.match(new RegExp(`^- ${key}:\\s*(.+)$`, 'm'));
+      return m ? m[1].trim() : null;
+    };
+
+    const confidence   = parseFloat(get('confidence')) || 0.5;
+    const hits         = parseInt(get('hits'), 10) || 0;
+    const text_        = get('text') || '';
+    const source       = get('source') || null;
+    const lastAccessTs = get('updated') || null;
+
+    entries.push({
+      fact: { mem_id, category, text: text_, source_unit: source },
+      hits,
+      confidence,
+      lastAccessTs,
+      pruned: false,
+      promoted: false,
+      promotedAt: null,
+    });
+  }
+  return entries;
+}
+
 // ── decayConfidence ───────────────────────────────────────────────────────────
 // Applies exponential depth-2 decay to a base confidence.
 // decay = base * 0.5^(age_ms / HALF_LIFE) where age_ms = now - last_access_ts.
@@ -216,6 +255,24 @@ function renderMemory(cwd) {
   const factMap = new Map(); // mem_id → { fact, hits, confidence, lastAccessTs, pruned, promoted }
 
   for (const { unitId, path: fpath } of fragments) {
+    // legacy-orphan: block format (not YAML-frontmatter fragment) — special-case before parseFragment
+    if (unitId === 'legacy-orphan') {
+      try {
+        const orphanText = fs.readFileSync(fpath, 'utf8');
+        const orphanEntries = parseOrphanMemory(orphanText);
+        for (const entry of orphanEntries) {
+          const mid = String(entry.fact.mem_id || '');
+          if (!mid) continue;
+          // Valid fragments win — orphans are fallback; skip if already in factMap
+          if (factMap.has(mid)) continue;
+          factMap.set(mid, entry);
+        }
+      } catch (e) {
+        process.stderr.write(`[forge-projection] warn: skipping legacy-orphan memory: ${e.message}\n`);
+      }
+      continue;
+    }
+
     let frag;
     try {
       const text = fs.readFileSync(fpath, 'utf8');
