@@ -249,26 +249,43 @@ function renderMemory(cwd) {
       const entry = factMap.get(mid);
 
       switch (evt.kind) {
+        case 'seed': {
+          // Seed establishes the baseline confidence/hits from a migrated memory.
+          // Must overwrite (not increment) — it is the starting point, not an accrual.
+          if (entry._mutated) {
+            process.stderr.write(`[forge-projection] warn: non-first seed event for ${mid} — applying last-seed-wins\n`);
+          }
+          entry.hits = (typeof evt.hits === 'number' ? evt.hits : parseInt(evt.hits, 10)) || 0;
+          entry.confidence = parseFloat(evt.confidence) || entry.confidence;
+          entry.lastAccessTs = evt.ts || entry.lastAccessTs;
+          entry._seenSeed = true;
+          break;
+        }
         case 'hit':
         case 'confirm':
+          entry._mutated = true;
           entry.hits += 1;
           entry.lastAccessTs = evt.ts || entry.lastAccessTs;
           // Each hit nudges confidence up slightly (cap 0.99)
           entry.confidence = Math.min(0.99, entry.confidence + 0.02);
           break;
         case 'prune':
+          entry._mutated = true;
           entry.pruned = true;
           break;
         case 'promote':
+          entry._mutated = true;
           entry.promoted = true;
           entry.promotedAt = evt.ts || null;
           entry.confidence = Math.min(0.99, entry.confidence + 0.05);
           break;
         case 'supersede':
           // Superseded facts are treated as pruned
+          entry._mutated = true;
           entry.pruned = true;
           break;
         case 'decay':
+          entry._mutated = true;
           // Explicit decay events reduce confidence
           if (evt.new_confidence !== undefined) {
             entry.confidence = parseFloat(evt.new_confidence) || entry.confidence;
