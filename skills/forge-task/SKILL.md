@@ -249,7 +249,12 @@ thinking: adaptive
 Score clarity (scope/acceptance/tech/dependencies/risk). Ask about dimensions below 70.
 Write {TASK_ID}-CONTEXT.md to .gsd/tasks/{TASK_ID}/ with sections:
   ## Decisions, ## Agent's Discretion, ## Open Questions, ## Out of Scope
-Append significant decisions to .gsd/DECISIONS.md using **Edit only** — never Write (replaces whole file; PreToolUse hook blocks Write here). Read the file in full first (paginate if large), then Edit with old_string = current last row and new_string = that row + newline + new row(s). Bash: cat >> file << 'EOF' (never >).
+Append significant decisions to the **fragment store** via `forge-decisions.js --write` (stdin JSON) — do NOT write to `.gsd/DECISIONS.md` directly. Use:
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+printf '%s' "$key_decisions_json" | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "$WORKING_DIR"
+```
+Where `key_decisions_json` is `{ "unit_id": "{TASK_ID}", "decisions": [{when, scope, decision, choice, rationale, revisable}, ...] }`. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-merger).
 Return ---GSD-WORKER-RESULT---.
 ```
 
@@ -528,16 +533,20 @@ mkdir -p .gsd/forge
 Agent("forge-memory", "WORKING_DIR: {WORKING_DIR}\nUNIT_TYPE: execute-task\nUNIT_ID: {TASK_ID}\n\nSUMMARY_CONTENT:\n{content of {TASK_ID}-SUMMARY.md}\n\nRESULT_BLOCK:\n{full ---GSD-WORKER-RESULT--- block verbatim}\n\nKEY_DECISIONS:\n{key_decisions from SUMMARY.md frontmatter, or '(none)'}")
 ```
 
-**Write ledger entry** — append a compact entry to `.gsd/LEDGER.md` (create if missing, same file used by milestones). **Append using `Edit` only** (never `Write` on an existing file — it replaces the whole thing; a PreToolUse hook blocks `Write` here). Initial creation (file absent) may use `Write`. To append: `Read` the file in full first, then `Edit` with `old_string` = current last line and `new_string` = that line + newline + your new entry. Bash alternative: `cat >> .gsd/LEDGER.md << 'EOF'` (never `>`).
-```markdown
-## {TASK_ID} — {TASK_DESCRIPTION} · {YYYY-MM-DD}
-
-{2-sentence description of what was done and why it matters}
-
-**Key files:** path/to/file, path/to/file (up to 5)
-**Key decisions:** one-liner (if any, else omit line)
-
----
+**Write ledger entry to fragment store** — pipe a JSON payload to `forge-ledger.js --write`. The global LEDGER is rebuilt from fragments by the merger; do not append to it directly.
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-ledger.js ] && echo scripts || echo "$HOME/.claude/scripts")
+node "$FORGE_SCRIPTS_DIR/forge-ledger.js" --write --cwd . <<'EOF'
+{
+  "id": "{TASK_ID}",
+  "title": "{TASK_DESCRIPTION}",
+  "completed_at": "$(date -u +%FT%TZ)",
+  "slices": [],
+  "key_files": ["path/to/file"],
+  "key_decisions": ["one-liner"],
+  "body": "{2-sentence description of what was done and why it matters}"
+}
+EOF
 ```
 Keep each entry under 10 lines. This is the only task artifact that persists regardless of `task_cleanup` setting.
 
@@ -552,7 +561,7 @@ Keep each entry under 10 lines. This is the only task artifact that persists reg
   ```bash
   rm -rf .gsd/tasks/{TASK_ID}
   ```
-In all cases `.gsd/LEDGER.md`, `AUTO-MEMORY.md`, `DECISIONS.md`, and `CODING-STANDARDS.md` are never touched.
+In all cases the ledger fragment (`.gsd/ledger/{TASK_ID}.md`), `AUTO-MEMORY.md`, `DECISIONS.md`, and `CODING-STANDARDS.md` are never touched.
 
 **Final report:**
 ```

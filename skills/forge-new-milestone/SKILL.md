@@ -179,7 +179,31 @@ Write decisions to `.gsd/milestones/{MILESTONE_ID}/{MILESTONE_ID}-CONTEXT.md`:
 - {ideas that belong in later milestones}
 ```
 
-Append significant decisions to `.gsd/DECISIONS.md` using **`Edit` only** — never `Write` (it replaces the whole file; a PreToolUse hook blocks `Write` on this path). `Read` the file in full first (paginate if large), then `Edit` with `old_string` = current last row and `new_string` = that row + newline + your new row(s). Bash alternative: `cat >> .gsd/DECISIONS.md << 'EOF'` (never `>`).
+### Append significant decisions to the fragment store
+
+<!-- pre-S03: this used to append directly to the decisions log file -->
+
+For each significant decision made during this discuss unit, pipe a JSON fragment to `forge-decisions.js --write`:
+
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+echo '{
+  "unit_id": "{MILESTONE_ID}",
+  "decisions": [
+    {
+      "when": "YYYY-MM-DD",
+      "scope": "milestone",
+      "decision": "Short label for this decision",
+      "choice": "What was chosen",
+      "rationale": "Why this was chosen",
+      "revisable": "yes|no"
+    }
+  ]
+}' | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd .
+```
+
+- Multiple decisions can be batched in a single `decisions` array invocation.
+- The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-completer, step 5) — never edit it directly.
 
 ---
 

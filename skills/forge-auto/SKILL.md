@@ -638,12 +638,33 @@ Store the returned `taskId` as `current_task_id`. Then immediately mark it as in
 TaskUpdate({ taskId: current_task_id, status: "in_progress" })
 ```
 
-**Selective memory injection** — before building the worker prompt, filter `ALL_MEMORIES` to the entries most relevant to this unit:
-- For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include memories whose description shares ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries.
-- For `plan-slice` / `research-slice`: include `architecture` and `pattern` memories related to the milestone scope. Cap at 8 entries.
-- For other unit types: include top-5 entries by confidence score.
-- If ALL_MEMORIES is empty or no entries match: inject `(none)`.
+**Selective memory injection** — before building the worker prompt, source memory entries from the fragment store via the `forge-memory.js` API (D9):
+
+```bash
+# 1. List all available fragment unit IDs
+_frag_list=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --list --cwd "$WORKING_DIR" 2>/dev/null || echo "[]")
+```
+
+If `_frag_list` is a non-empty JSON array (fragment store is populated):
+- For each `unit_id` in the list, read its fragment:
+  ```bash
+  _frag=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --read <unit_id> --cwd "$WORKING_DIR" 2>/dev/null)
+  ```
+  Each fragment has `facts[]`, `category`, `confidence`, `hits`.
+- Apply filter to `facts[]` entries using the same selection logic:
+  - For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include facts that share ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries total across all fragments.
+  - For `plan-slice` / `research-slice`: include facts from fragments with `category` = `architecture` or `pattern` related to the milestone scope. Cap at 8 entries.
+  - For other unit types: include top-5 facts by fragment `confidence` score.
+- Collect matching facts into `RELEVANT_MEMORIES` string (same shape as before — one bullet per fact).
+
+If `_frag_list` is `[]` or errors (pre-fragment-store workspace — fragment store not yet populated):
+- Fall back to `ALL_MEMORIES` (loaded from `.gsd/AUTO-MEMORY.md` at step 5 of Load context) using the same filter logic above.
+
+If no entries match in either path: set `RELEVANT_MEMORIES` to `(none)`.
+
 Store as `RELEVANT_MEMORIES` and use in the worker prompt `## Project Memory` section instead of the raw full file.
+
+> For human-readable consolidation of the fragment store into `.gsd/AUTO-MEMORY.md`, run `/forge-doctor --regen-projection` (uses `forge-memory.js --write-all` / `forge-projection` internally). The monolith is no longer the runtime source of truth (D9).
 
 **Heartbeat — record active worker** before dispatching (M005+: writes via forge-runs.js when multi-run, legacy auto-mode.json fallback):
 ```bash
@@ -864,9 +885,25 @@ Each entry must be a single line. This is the orchestrator-side record; workers 
 
 **b) Update per-milestone STATE** — advance to next unit position via `scripts/forge-state.js --update {M###} --json '{...}'`. The global `.gsd/STATE.md` dashboard is regenerated separately via `scripts/forge-dashboard.js` (called on boot/exit/phase-change per `multi_run.dashboard_refresh_on` pref).
 
-**c) Append decisions** — if `key_decisions` in result, append to per-milestone `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-DECISIONS.md` (M004+). The global `.gsd/DECISIONS.md` is merged on `complete-milestone` via `scripts/forge-merger.js` (S05) under `.gsd/.locks/DECISIONS.md/`. Use **`Edit`** for an existing per-milestone file (anchor on last row); use `Write` once if the file does not yet exist (header + first row). Bash alternative: `cat >> path << 'EOF'`.
+**c) Append decisions** — if `key_decisions` in result, write to the fragment store via `forge-decisions.js --write` (stdin JSON):
 
-**Legacy:** if `{M###}` not resolved, append to `.gsd/DECISIONS.md` global direct (pre-M004 behavior).
+<!-- pre-S03: this used to Edit/cat >> {M###}-DECISIONS.md or .gsd/DECISIONS.md directly -->
+
+Partition rule:
+- Milestone-bound task (T## inside a slice, `{M###}` is set) → `unit_id = {M###}`
+- Loose `/forge-task` run (no milestone, `{task-id}` is set) → `unit_id = {task-id}`
+
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+DECISIONS_UNIT_ID="${M###:-${task_id:-}}"
+if [ -n "$DECISIONS_UNIT_ID" ]; then
+  printf '%s' "$key_decisions_json" | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "$WORKING_DIR"
+else
+  echo "[forge-auto] WARNING: no unit_id for decisions — skipping fragment write" >&2
+fi
+```
+
+Where `key_decisions_json` is a JSON object `{ "unit_id": "$DECISIONS_UNIT_ID", "decisions": [...] }` built from the `key_decisions` field of the worker result. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-merger, S05). Do NOT write directly to `.gsd/DECISIONS.md` or any `M###-DECISIONS.md` file.
 
 **d) Memory extraction** — dispatch `forge-memory` agent **in the background** (`run_in_background: true`) so the orchestrator can immediately dispatch the next unit without waiting for memory extraction to finish. Rationale: memory extraction averages 20–40s, runs on Haiku (cheap + fast), and the extracted memories only affect the *next* selective injection — not the current dispatch decision. Running it in parallel with the next unit is the single highest-leverage parallelism win (one extraction per unit, every unit).
 

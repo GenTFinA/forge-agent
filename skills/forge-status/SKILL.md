@@ -31,6 +31,7 @@ fi
 **Se .gsd/STATE.md não existe:** Stop and tell the user:
 > Nenhum projeto GSD encontrado neste diretório. Execute `/forge-init` para começar.
 
+<!-- pre-S05: kept for bootstrap init — AUTO-MEMORY.md creation is a write-path init, not a monolith read; fragment-store projection is used for display. This block only runs when the file is absent (first-time setup). -->
 **Se `.gsd/AUTO-MEMORY.md` não existe:** Create it silently before proceeding:
 ```
 <!-- gsd-auto-memory | project: <from PROJECT.md or directory name> | extraction_count: 0 -->

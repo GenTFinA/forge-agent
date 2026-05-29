@@ -1,0 +1,492 @@
+#!/usr/bin/env node
+// forge-ledger — Per-milestone LEDGER fragment store for Forge Agent
+//
+// Library exports:
+//   LEDGER_DIR                          → string  // relative path '.gsd/ledger'
+//   ledgerDir(cwd)                      → string  // absolute path to ledger dir
+//   fragmentPath(cwd, milestoneId)      → string  // absolute path to <id>.md
+//   parseFragment(text)                 → object  // parse markdown with YAML frontmatter
+//   writeFragment(cwd, entry, opts)     → { path, created }
+//   readFragment(cwd, milestoneId)      → object | null
+//   listFragments(cwd)                  → Array<{ id, path }>
+//
+// CLI:
+//   node forge-ledger.js --list [--cwd <dir>]
+//   node forge-ledger.js --read <id> [--cwd <dir>]
+//   node forge-ledger.js --write [--cwd <dir>]   (reads JSON entry from stdin)
+//   node forge-ledger.js --validate <id> [--cwd <dir>]
+//   node forge-ledger.js --smoke-regression
+//   node forge-ledger.js --help
+//
+// Exit codes:
+//   0 — success
+//   1 — runtime error (invalid id, parse error, etc.)
+//   2 — unknown/missing arguments
+
+'use strict';
+
+const fs = require('fs');
+const path = require('path');
+const { isValid, entityKind } = require('./forge-ids');
+const { parseScalar, serializeScalar, writeAtomic } = require('./forge-yaml-safe');
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const LEDGER_DIR = '.gsd/ledger';
+
+// ── ledgerDir ─────────────────────────────────────────────────────────────────
+// Returns the absolute path to the ledger directory for a given cwd.
+function ledgerDir(cwd) {
+  return path.join(cwd || process.cwd(), '.gsd', 'ledger');
+}
+
+// ── fragmentPath ──────────────────────────────────────────────────────────────
+// Returns absolute path to the fragment file for a milestone ID.
+// Throws if the ID is invalid or not a milestone.
+function fragmentPath(cwd, milestoneId) {
+  if (!isValid(milestoneId)) {
+    throw new Error(`Invalid milestone ID: ${milestoneId}`);
+  }
+  if (entityKind(milestoneId) !== 'milestone') {
+    throw new Error(`ID is not a milestone: ${milestoneId} (kind: ${entityKind(milestoneId)})`);
+  }
+  return path.join(ledgerDir(cwd), `${milestoneId}.md`);
+}
+
+// ── parseFragment ─────────────────────────────────────────────────────────────
+// Parses a LEDGER fragment markdown file (YAML frontmatter + body).
+// Accepts both inline [a, b] and block "- a\n- b" array forms, including
+// block-scalar values (multi-line strings via `|` indicator).
+// Unknown frontmatter keys are passed through as-is.
+// Returns { id, title, completed_at, slices, key_files, key_decisions, body, ...rest }
+function parseFragment(text) {
+  const match = text.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) {
+    // No frontmatter — return minimal object with raw body
+    return { id: null, title: null, completed_at: null, slices: [], key_files: [], key_decisions: [], body: text.trim() };
+  }
+
+  const frontmatter = match[1];
+  const body = match[2].trim();
+  const result = {};
+
+  // Parse frontmatter line by line
+  const lines = frontmatter.split('\n');
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // Block array item "  - value" or "- value" (continuation of array key)
+    // Only handled as part of key-value fallthrough below when currentArray is set
+    // We handle continuations inline after key detection.
+
+    // Key-value pair
+    const kv = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
+    if (kv) {
+      const key = kv[1];
+      const rawVal = kv[2].trim();
+
+      // Inline array: [a, b, c] or []
+      if (rawVal.startsWith('[')) {
+        const inner = rawVal.replace(/^\[|\]$/g, '').trim();
+        result[key] = inner === '' ? [] : inner.split(',').map(s => s.trim()).filter(Boolean);
+        i++;
+        continue;
+      }
+
+      if (rawVal === '') {
+        // Block array — collect items on subsequent lines
+        result[key] = [];
+        i++;
+        while (i < lines.length) {
+          const itemLine = lines[i];
+          // Block array item: "  - value" or "- value"
+          const arrayItem = itemLine.match(/^(\s*)-\s(.*)$/);
+          if (arrayItem) {
+            const itemIndent = arrayItem[1].length;
+            // Use parseScalar on the value after "- " for block-scalar item support
+            const valueAfterDash = arrayItem[2];
+            if (valueAfterDash.trim() === '|') {
+              // Block-scalar item value — parse continuation lines
+              // Temporarily build a sub-lines array from `|` onward
+              const subLines = ['|'].concat(lines.slice(i + 1));
+              const parsed = parseScalar(subLines, 0, itemIndent);
+              result[key].push(parsed.value);
+              // Advance by how many sub-lines were consumed (parsed.nextIndex - 1 because we pre-added '|')
+              i += parsed.nextIndex; // nextIndex accounts for `|` line + content lines
+            } else {
+              result[key].push(valueAfterDash.trim());
+              i++;
+            }
+          } else {
+            break; // end of array block
+          }
+        }
+        continue;
+      }
+
+      // Scalar value (possibly block-scalar `|`)
+      const scalarLines = [rawVal].concat(lines.slice(i + 1));
+      const parsed = parseScalar(scalarLines, 0, 0);
+      result[key] = parsed.value;
+      // Advance past consumed continuation lines (parsed.nextIndex - 1 for extra lines after key)
+      i += parsed.nextIndex; // nextIndex relative to scalarLines; line i is index 0 in scalarLines
+      continue;
+    }
+
+    // Unrecognized line — skip
+    i++;
+  }
+
+  // Normalize expected array fields
+  const arrayFields = ['slices', 'key_files', 'key_decisions'];
+  for (const f of arrayFields) {
+    if (!Array.isArray(result[f])) {
+      result[f] = result[f] != null ? [String(result[f])] : [];
+    }
+  }
+
+  // Normalize scalar fields
+  result.id = result.id || null;
+  result.title = result.title || null;
+  result.completed_at = result.completed_at || null;
+  result.body = body;
+
+  return result;
+}
+
+// ── serializeFrontmatter ──────────────────────────────────────────────────────
+// Serializes an entry object to YAML frontmatter string.
+// Keys are emitted in alphabetical order for diff stability.
+// Arrays use block form for readability.
+// Scalar values use forge-yaml-safe to handle multi-line / unsafe chars.
+function serializeFrontmatter(entry) {
+  const skip = new Set(['body']);
+  const keys = Object.keys(entry).filter(k => !skip.has(k)).sort();
+
+  const lines = [];
+  for (const key of keys) {
+    const val = entry[key];
+    if (Array.isArray(val)) {
+      if (val.length === 0) {
+        lines.push(`${key}: []`);
+      } else {
+        lines.push(`${key}:`);
+        for (const item of val) {
+          const serialized = serializeScalar(String(item), 2);
+          lines.push(`  - ${serialized}`);
+        }
+      }
+    } else if (val === null || val === undefined) {
+      lines.push(`${key}: `);
+    } else {
+      const serialized = serializeScalar(String(val), 0);
+      lines.push(`${key}: ${serialized}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+// ── writeFragment ─────────────────────────────────────────────────────────────
+// Writes a LEDGER fragment to disk.
+// Validates entry.id before writing.
+// opts: optional { runId, sessionId } for lock identity.
+// Returns { path: string, created: boolean }
+// created: false if file existed and content is identical (idempotent).
+function writeFragment(cwd, entry, opts) {
+  opts = opts || {};
+  if (!entry || !entry.id) {
+    throw new Error('entry.id is required');
+  }
+
+  const fpath = fragmentPath(cwd, entry.id); // throws if invalid id
+
+  // Serialize
+  const frontmatter = serializeFrontmatter(entry);
+  const body = entry.body ? `\n${entry.body}` : '';
+  const content = `---\n${frontmatter}\n---\n${body}`;
+
+  // Idempotent check — read before acquiring lock to avoid unnecessary contention
+  if (fs.existsSync(fpath)) {
+    try {
+      const existing = fs.readFileSync(fpath, 'utf8');
+      if (existing === content) {
+        return { path: fpath, created: false };
+      }
+    } catch {
+      // File unreadable — proceed to write
+    }
+  }
+
+  writeAtomic(fpath, content, {
+    cwd: cwd || process.cwd(),
+    runId: opts.runId || null,
+    sessionId: opts.sessionId || null,
+  });
+
+  return { path: fpath, created: true };
+}
+
+// ── readFragment ──────────────────────────────────────────────────────────────
+// Reads and parses a LEDGER fragment. Returns null if the file does not exist.
+function readFragment(cwd, milestoneId) {
+  let fpath;
+  try {
+    fpath = fragmentPath(cwd, milestoneId);
+  } catch (e) {
+    throw e; // propagate invalid id error
+  }
+
+  if (!fs.existsSync(fpath)) return null;
+  const text = fs.readFileSync(fpath, 'utf8');
+  return parseFragment(text);
+}
+
+// ── listFragments ─────────────────────────────────────────────────────────────
+// Lists all fragment files in the ledger directory.
+// Returns Array<{ id, path }> sorted by id ascending.
+// Returns [] if the directory does not exist.
+function listFragments(cwd) {
+  const dir = ledgerDir(cwd);
+  if (!fs.existsSync(dir)) return [];
+
+  const files = fs.readdirSync(dir);
+  const fragments = files
+    .filter(f => f.endsWith('.md'))
+    .map(f => ({
+      id: f.slice(0, -3), // strip .md
+      path: path.join(dir, f),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+
+  return fragments;
+}
+
+// ── cliMain ───────────────────────────────────────────────────────────────────
+function printUsage() {
+  console.log(`Usage: node forge-ledger.js <command> [options]
+
+Commands:
+  --list [--cwd <dir>]          List all ledger fragments (JSON array)
+  --read <id> [--cwd <dir>]     Read and print a fragment (JSON), null if missing
+  --write [--cwd <dir>]         Write fragment from stdin (JSON entry)
+  --validate <id> [--cwd <dir>] Validate ID and check if fragment exists
+  --smoke-regression            Run regression smoke tests (multi-line + renderLedger)
+  --help, -h                    Show this help
+
+Options:
+  --cwd <dir>   Working directory (default: process.cwd())
+
+Exit codes:
+  0  Success
+  1  Runtime error (invalid id, parse error, I/O failure)
+  2  Unknown or missing arguments`);
+}
+
+function cliMain(argv) {
+  // Parse --cwd
+  let cwd = process.cwd();
+  const cwdIdx = argv.indexOf('--cwd');
+  if (cwdIdx !== -1) {
+    cwd = argv[cwdIdx + 1];
+    if (!cwd) {
+      process.stderr.write('--cwd requires a directory argument\n');
+      process.exit(2);
+    }
+    argv = argv.filter((_, i) => i !== cwdIdx && i !== cwdIdx + 1);
+  }
+
+  const cmd = argv[0];
+
+  if (!cmd || cmd === '--help' || cmd === '-h') {
+    printUsage();
+    process.exit(0);
+  }
+
+  if (cmd === '--list') {
+    const result = listFragments(cwd);
+    console.log(JSON.stringify(result));
+    process.exit(0);
+  }
+
+  if (cmd === '--read') {
+    const id = argv[1];
+    if (!id) {
+      process.stderr.write('--read requires a milestone ID\n');
+      process.exit(2);
+    }
+    const fragment = readFragment(cwd, id);
+    console.log(JSON.stringify(fragment));
+    process.exit(0);
+  }
+
+  if (cmd === '--write') {
+    // Read JSON entry from stdin
+    let raw = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', chunk => { raw += chunk; });
+    process.stdin.on('end', () => {
+      let entry;
+      try {
+        entry = JSON.parse(raw);
+      } catch (e) {
+        process.stderr.write(`Failed to parse JSON from stdin: ${e.message}\n`);
+        process.exit(1);
+      }
+      const result = writeFragment(cwd, entry);
+      console.log(JSON.stringify(result));
+      process.exit(0);
+    });
+    return; // async — do not fall through
+  }
+
+  if (cmd === '--validate') {
+    const id = argv[1];
+    if (!id) {
+      process.stderr.write('--validate requires a milestone ID\n');
+      process.exit(2);
+    }
+    let exists = false;
+    let existsError = null;
+    try {
+      const fpath = fragmentPath(cwd, id);
+      exists = fs.existsSync(fpath);
+    } catch (e) {
+      existsError = e.message;
+    }
+    const result = {
+      id,
+      valid: isValid(id),
+      kind: entityKind(id),
+      exists: existsError ? false : exists,
+    };
+    if (existsError) result.error = existsError;
+    console.log(JSON.stringify(result));
+    process.exit(0);
+  }
+
+  if (cmd === '--smoke-regression') {
+    runSmokeRegression();
+    return;
+  }
+
+  // Unknown command
+  process.stderr.write(`Unknown argument: ${cmd}\n\n`);
+  printUsage();
+  process.exit(2);
+}
+
+// ── Smoke regression ─────────────────────────────────────────────────────────
+function runSmokeRegression() {
+  const os = require('os');
+  let allPassed = true;
+
+  function assert(label, actual, expected) {
+    if (actual === expected) {
+      console.log('PASS: ' + label);
+    } else {
+      console.log('FAIL: ' + label + '\n  expected: ' + JSON.stringify(expected) + '\n  got:      ' + JSON.stringify(actual));
+      allPassed = false;
+    }
+  }
+
+  // Use a temp dir that won't conflict with real ledger data
+  const tmpBase = path.join(os.tmpdir(), '.gsd-smoke-t05-' + process.pid);
+  const smokeCwd = tmpBase;
+
+  try {
+    fs.mkdirSync(path.join(tmpBase, '.gsd', 'ledger'), { recursive: true });
+
+    // Need a valid milestone ID — use timestamp format
+    const smokeId = 'M-20260101000000-smoke-t05';
+
+    // ── Test 1: multi-line title round-trip ──────────────────────────────────
+    const multiLineTitle = 'Line1\nLine2';
+    const entry = {
+      id: smokeId,
+      title: multiLineTitle,
+      completed_at: '2026-01-01T00:00:00Z',
+      slices: ['S01', 'S02'],
+      key_files: ['scripts/forge-ledger.js'],
+      key_decisions: ['[bracket-start decision', 'normal decision'],
+      body: 'Body content here.',
+    };
+
+    writeFragment(smokeCwd, entry);
+    const readBack = readFragment(smokeCwd, smokeId);
+
+    assert('round-trip: title multi-line', readBack.title, multiLineTitle);
+    assert('round-trip: completed_at', readBack.completed_at, entry.completed_at);
+    assert('round-trip: slices length', readBack.slices.length, 2);
+    assert('round-trip: slices[0]', readBack.slices[0], 'S01');
+    assert('round-trip: slices[1]', readBack.slices[1], 'S02');
+    assert('round-trip: key_decisions[0] bracket-start', readBack.key_decisions[0], '[bracket-start decision');
+    assert('round-trip: key_decisions[1] normal', readBack.key_decisions[1], 'normal decision');
+    assert('round-trip: body', readBack.body, 'Body content here.');
+
+    // ── Test 2: idempotent write ──────────────────────────────────────────────
+    const result2 = writeFragment(smokeCwd, entry);
+    assert('idempotent: created=false on second identical write', result2.created, false);
+
+    // ── Test 3: 3-arg writeFragment (opts.runId/sessionId) ────────────────────
+    const entry2 = Object.assign({}, entry, { id: 'M-20260101000001-smoke-t05b', title: 'Simple title' });
+    const result3 = writeFragment(smokeCwd, entry2, { runId: 'smoke-run', sessionId: 'smoke-sess' });
+    assert('3-arg writeFragment: created=true', result3.created, true);
+    const readBack3 = readFragment(smokeCwd, entry2.id);
+    assert('3-arg: round-trip title', readBack3.title, 'Simple title');
+
+    // ── Test 4: renderLedger regression (forge-projection consumer) ───────────
+    let renderLedgerPassed = false;
+    try {
+      const projection = require('./forge-projection');
+      const rendered = projection.renderLedger(smokeCwd);
+      // Should contain the milestone id and multi-line title content
+      const containsId = rendered.includes(smokeId);
+      // renderLedger wraps title in **...**; check for Line1 (first line of multi-line)
+      const containsTitle = rendered.includes('Line1');
+      renderLedgerPassed = containsId && containsTitle && rendered.length > 0;
+      assert('renderLedger: non-empty output', rendered.length > 0, true);
+      assert('renderLedger: contains milestone id', containsId, true);
+      assert('renderLedger: contains title content', containsTitle, true);
+    } catch (e) {
+      console.log('FAIL: renderLedger threw: ' + e.message);
+      allPassed = false;
+    }
+
+  } finally {
+    // Cleanup
+    try { fs.rmSync(tmpBase, { recursive: true, force: true }); } catch {}
+  }
+
+  if (allPassed) {
+    console.log('\nPASS: all smoke-regression checks passed');
+    process.exit(0);
+  } else {
+    console.log('\nFAIL: one or more smoke-regression checks failed');
+    process.exit(1);
+  }
+}
+
+// ── Module exports ────────────────────────────────────────────────────────────
+// Must be set before CLI guard so that circular requires (e.g. from
+// --smoke-regression → forge-projection → forge-ledger) get a complete exports object.
+module.exports = {
+  LEDGER_DIR,
+  ledgerDir,
+  fragmentPath,
+  writeFragment,
+  readFragment,
+  listFragments,
+  parseFragment,
+};
+
+// ── Guarded CLI invocation ────────────────────────────────────────────────────
+if (require.main === module) {
+  try {
+    cliMain(process.argv.slice(2));
+  } catch (e) {
+    process.stderr.write(`${e.message}\n`);
+    process.exit(1);
+  }
+}

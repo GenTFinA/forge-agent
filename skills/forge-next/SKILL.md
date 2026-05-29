@@ -350,12 +350,32 @@ Read PREFS for `skip_discuss` and `skip_research`. If the current unit type is s
 
 ### 3. Build worker prompt
 
-**Selective memory injection** — filter `ALL_MEMORIES` to entries relevant to this unit:
-- For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include memories whose description shares ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries.
-- For `plan-slice` / `research-slice`: include `architecture` and `pattern` memories related to the milestone scope. Cap at 8 entries.
-- For other unit types: include top-5 entries by confidence score.
-- If no entries match: inject `(none)`.
+**Selective memory injection** — read memories from the fragment store, then filter to entries relevant to this unit:
+
+```bash
+FRAGMENT_LIST=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --list 2>/dev/null || echo "[]")
+```
+
+If `FRAGMENT_LIST` is a non-empty JSON array, iterate over each `unit_id` in the list:
+
+```bash
+# For each unit_id in FRAGMENT_LIST:
+FRAGMENT=$(node "$FORGE_SCRIPTS_DIR/forge-memory.js" --read <unit-id> 2>/dev/null || echo "null")
+```
+
+Collect fragments where `FRAGMENT` is non-null. Apply the filter rules below to the collected fragments (each fragment has `facts[]`, `category`, `confidence`, `hits`):
+
+- For `execute-task`: read keywords from `T##-PLAN.md` title + step names. Include fragments whose `facts[]` text shares ≥2 keywords with the plan. Prefer categories `gotcha` and `convention`. Cap at 8 entries.
+- For `plan-slice` / `research-slice`: include fragments with categories `architecture` and `pattern` related to the milestone scope. Cap at 8 entries.
+- For other unit types: include top-5 fragments by `confidence` score.
+
+**Fallback:** If `FRAGMENT_LIST` is an empty array `[]` or `forge-memory.js --list` errors, fall back to `ALL_MEMORIES` (loaded from `.gsd/AUTO-MEMORY.md` at step 5 of `## Load context`) and apply the same filter rules above. This preserves backward compatibility with pre-fragment-store workspaces.
+
+If no entries match after filtering: inject `(none)`.
+
 Store as `RELEVANT_MEMORIES` and use in the worker prompt `## Project Memory` section.
+
+> For human-readable consolidation, run `/forge-doctor --regen-projection` to rebuild the monolith from fragments (writes `AUTO-MEMORY.md` via `forge-memory.js --write-all`). See `forge-projection` in doctor help.
 
 Use the template from `~/.claude/forge-dispatch.md` for the current `unit_type`.
 Substitute placeholders:
@@ -449,7 +469,25 @@ Each entry must be a single line. Append-only is atomic up to PIPE_BUF — event
 
 **b) Update per-milestone STATE** — advance to next unit position via `scripts/forge-state.js --update {M###} --json '{...}'`. Dashboard regen happens separately via `scripts/forge-dashboard.js`.
 
-**c) Append decisions** — if `key_decisions` in result, append to per-milestone `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-DECISIONS.md` (M004+). Global `.gsd/DECISIONS.md` merged on `complete-milestone` via merger (S05). `Edit` for existing file; `Write` once if missing; or `cat >> path << 'EOF'`. Legacy fallback: global path direct if `{M###}` not resolved.
+**c) Append decisions** — if `key_decisions` in result, write to the fragment store via `forge-decisions.js --write` (stdin JSON):
+
+<!-- pre-S03: this used to Edit/cat >> {M###}-DECISIONS.md or .gsd/DECISIONS.md directly -->
+
+Partition rule:
+- Milestone-bound task (T## inside a slice, `{M###}` is set) → `unit_id = {M###}`
+- Loose `/forge-task` run (no milestone, `{task-id}` is set) → `unit_id = {task-id}`
+
+```bash
+FORGE_SCRIPTS_DIR=$([ -f scripts/forge-decisions.js ] && echo scripts || echo "$HOME/.claude/scripts")
+DECISIONS_UNIT_ID="${M###:-${task_id:-}}"
+if [ -n "$DECISIONS_UNIT_ID" ]; then
+  printf '%s' "$key_decisions_json" | node "$FORGE_SCRIPTS_DIR/forge-decisions.js" --write --cwd "$WORKING_DIR"
+else
+  echo "[forge-next] WARNING: no unit_id for decisions — skipping fragment write" >&2
+fi
+```
+
+Where `key_decisions_json` is a JSON object `{ "unit_id": "$DECISIONS_UNIT_ID", "decisions": [...] }` built from the `key_decisions` field of the worker result. The global `.gsd/DECISIONS.md` is rebuilt from fragments during `complete-milestone` (forge-merger, S05). Do NOT write directly to `.gsd/DECISIONS.md` or any `M###-DECISIONS.md` file.
 
 **d) Memory extraction** — call `forge-memory` agent (blocking — await before continuing):
 

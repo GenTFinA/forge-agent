@@ -140,6 +140,30 @@ If `not-forge`: skip silently.
 
 ---
 
+## Executar migração de fragment stores
+
+After reinstalling, run the consolidated migration to ensure the fragment store schema is current.
+The migrator is idempotent — on subsequent runs it reports `written:0` for stores already migrated.
+
+```bash
+node "{REPO_PATH}/scripts/forge-migrate.js" --cwd "$(pwd)" 2>&1
+```
+
+**Behavior and guarantees:**
+- Runs three migrators in order: `LEDGER.md → ledger/`, `DECISIONS.md → decisions/`, `AUTO-MEMORY.md → memory/`.
+- Each legacy monolith is renamed to `<name>.bak` **before** migration begins. If a `.bak` already exists it is preserved (never overwritten).
+- After migration, renders via `forge-projection` and diffs against the `.bak` — reports `identical` / `differs (numbering only)` / `differs` per store.
+- Writes `.gsd/SCHEMA-VERSION` on success.
+- **Idempotent:** running again reports `written:0` for each store — safe to run on every update.
+- **Dry-run preview:** `node scripts/forge-migrate.js --dry-run --cwd <repo>`.
+
+If the migrator exits non-zero, surface the error output to the user:
+```
+⚠ Migração falhou — verifique a saída acima. Os arquivos .bak foram preservados.
+```
+
+---
+
 ## Invalidar cache da status line
 
 After reinstalling, bust the version cache so the status line reflects the new
@@ -234,6 +258,7 @@ Melhorias:
 
   ✓ Preferências preservadas
   ✓ Comandos atualizados — já ativos nesta sessão
+  ✓ Fragment stores migrados (ou já atualizados)
   ⚠ Se um comando NOVO foi adicionado, reinicie o Claude Code para que apareça no autocomplete
 ```
 
@@ -247,6 +272,7 @@ Melhorias:
 
   ✓ Comandos, agents e skills sincronizados
   ✓ Preferências preservadas
+  ✓ Fragment stores migrados (ou já atualizados)
 ```
 
 **Rules for the report:**

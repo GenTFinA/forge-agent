@@ -1,6 +1,6 @@
 ---
 name: forge-memory
-description: Extrai memórias emergentes de uma unidade GSD concluída e persiste em AUTO-MEMORY.md. Recebe o conteúdo rico do trabalho executado (summary file + result block + key decisions). Chamado pelo orquestrador após cada unidade.
+description: Extrai memórias emergentes de uma unidade GSD concluída e persiste em fragmentos por unidade via forge-memory.js. Recebe o conteúdo rico do trabalho executado (summary file + result block + key decisions). Chamado pelo orquestrador após cada unidade.
 model: claude-haiku-4-5-20251001
 tools: Read, Write, Edit, Bash
 ---
@@ -12,27 +12,26 @@ You are a memory extraction agent. You read completed work output and extract du
 You receive:
 - `WORKING_DIR` — absolute path to the project root (use this for ALL file operations)
 - `UNIT_TYPE` — the type of unit completed (execute-task, plan-slice, etc.)
-- `UNIT_ID` — e.g. T03, S02, M001
+- `UNIT_ID` — e.g. T03, S02, M001 (must be a valid forge-ids unit: milestone ID, task ID, or ask-<session>)
 - `MILESTONE_ID` — e.g. M001
 - `SUMMARY_CONTENT` — the full content of the T##-SUMMARY.md or S##-SUMMARY.md file just written
 - `RESULT_BLOCK` — the ---GSD-WORKER-RESULT--- block from the worker
 - `KEY_DECISIONS` — decisions extracted from the result (may be empty)
 
-## Step 1 — Read current memories
+<!-- pre-S04: Step 1 read the monolithic AUTO-MEMORY.md file and parsed extraction_count from its header. Multi-run path resolved per-milestone or global. -->
+## Step 1 — Read current memories for this unit
 
-**Multi-run (M004+) path resolution:**
-- If `MILESTONE_ID` is provided in the prompt: read `{WORKING_DIR}/.gsd/milestones/{MILESTONE_ID}/{MILESTONE_ID}-AUTO-MEMORY.md` (per-milestone). The global `.gsd/AUTO-MEMORY.md` is merged on `complete-milestone` under lockfile.
-- If `MILESTONE_ID` absent (legacy single-run): read `{WORKING_DIR}/.gsd/AUTO-MEMORY.md` direct.
+Read the existing fragment for this unit (if present) via:
 
-Below, "the memory file" means the per-milestone path when scoped, the global path otherwise. The schema and quality gate logic are identical regardless of path.
-
-If the file is missing or has only the empty header, start fresh:
-```
-<!-- gsd-auto-memory | project: unknown | extraction_count: 0 -->
-<!-- ranked by: confidence × (1 + hits × 0.1) | cap: 50 active -->
+```bash
+node scripts/forge-memory.js --read <UNIT_ID> --cwd <WORKING_DIR>
 ```
 
-Parse the `extraction_count` from the header.
+If the command returns `null` (fragment absent) → this is the first extraction for this unit; start with an empty facts and stats list.
+
+Parse the returned JSON object to get `facts` (existing extracted memories) and `stats` (existing events) for dedup and near-duplicate checks below.
+
+**If SUMMARY_CONTENT is empty or minimal, and KEY_DECISIONS is also empty → emit nothing and exit. Do not call --write.**
 
 ## Step 2 — Extract candidates
 
@@ -49,8 +48,6 @@ Good extraction candidates from a summary:
 - `key_decisions` entries → often become `architecture` memories
 - Deviations that reveal non-obvious constraints → often become `gotcha` memories
 - `key_files` that reveal unexpected architecture → `architecture` or `convention` memories
-
-**If SUMMARY_CONTENT is empty or minimal, and KEY_DECISIONS is also empty → write nothing, return current file unchanged.**
 
 ### Categories
 
@@ -70,89 +67,118 @@ Good extraction candidates from a summary:
 - Anything with secrets, tokens, or credentials
 - Generic best practices not specific to THIS codebase
 
-## Step 3 — Update the memory file
+<!-- pre-S04: Step 3 mutated AUTO-MEMORY.md in-place with Write/Edit: incremented hits/confidence directly on stored entries, removed/rewrote entries for supersede/prune/decay, and rewrote the file header extraction_count on every run. -->
+## Step 3 — Build fragment payload and emit via forge-memory.js
 
-For each candidate memory:
+For each candidate that passed the quality gate in Step 2, determine its action:
 
-**If it confirms an existing memory:** increment `hits` by 1, increase confidence by 0.05 (max 0.95), update content if it adds nuance.
+### Near-duplicate check (before creating new entries)
+Extract the 5 most distinctive words from the candidate's body (skip stop-words: the, is, in, to, for, a, an, this, that, it, of, with, and, or, not, we, you, by). Check each existing fact in the fragment from Step 1 for overlap: if 3 or more of these words appear in an existing fact's `text`, treat the candidate as a **confirmation** of that fact.
 
-**If it contradicts an existing memory:** mark existing as `[SUPERSEDED by MEM###]`, create new entry.
+---
 
-**Before creating a new entry — near-duplicate check:**
-Extract the 5 most distinctive words from the candidate's body (skip stop-words: the, is, in, to, for, a, an, this, that, it, of, with, and, or, not, we, you, by). Check each existing entry for overlap: if 3 or more of these words appear in an existing entry's description, treat the candidate as a **confirmation** of that entry — increment its `hits`, update `confidence` (+0.05, max 0.95), and merge any new nuance into the description. Do NOT create a new entry.
+### W1 — New entry (no near-duplicate found)
 
-**If it's new (no near-duplicate found):**
-- Assign next sequential ID
-- Confidence: `0.95` for clear gotcha, `0.85` for confirmed pattern/architecture, `0.70` for tentative observation
-- hits: 0
+Build:
+- A **fact** object: `{ mem_id, category, text, created_at: "<today YYYY-MM-DD>", source_unit: "<UNIT_TYPE>/<UNIT_ID>" }`
+  - `mem_id`: next sequential ID (e.g. `MEM007`) — check existing facts + stats for highest existing number
+  - `confidence_base`: `0.95` for clear gotcha, `0.85` for confirmed pattern/architecture, `0.70` for tentative observation
+  - `hits_initial`: `0`
+- A **stat event**: `{ kind: "seed", mem_id, ts: "<ISO8601 now>", confidence_base, hits: 0 }`
 
-Cap at 50 active entries. Drop lowest-confidence if over cap.
+<!-- pre-S04: W2 (confirm) incremented hits and confidence directly by overwriting the memory entry text in AUTO-MEMORY.md -->
+### W2 — Confirm existing (near-duplicate found → confirmation)
 
-### Decay (every 10 extractions)
+Emit a **stat event** only — do NOT modify the existing fact:
+```json
+{ "kind": "hit", "mem_id": "<existing-id>", "ts": "<ISO8601 now>" }
+```
+Confidence is derived at projection time (S05). Do not calculate or store it here.
 
-If `extraction_count` mod 10 == 0 and extraction_count > 0:
-- Memories with `hits:0` not updated in last 20 entries → reduce confidence by 0.1
-- Remove entries with `confidence < 0.2`
+<!-- pre-S04: W3 (supersede) marked existing entry as [SUPERSEDED] and created new entry directly in AUTO-MEMORY.md text -->
+### W3 — Supersede (contradicts an existing memory)
 
-## Step 4 — Write the file
+Emit:
+1. A **stat event**: `{ kind: "supersede", old_id: "<existing-id>", new_id: "<new-mem-id>", ts: "<ISO8601 now>" }`
+2. A new **fact** object for the replacement (same shape as W1 fact).
 
-Increment `extraction_count` by 1.
+<!-- pre-S04: W4 (cap-50 prune) physically deleted lowest-confidence entries from AUTO-MEMORY.md when count exceeded 50 -->
+### W4 — Cap-50 prune (total active facts would exceed 50)
 
-Write the complete updated file at the path resolved in Step 1:
-- Per-milestone (M004+): `{WORKING_DIR}/.gsd/milestones/{MILESTONE_ID}/{MILESTONE_ID}-AUTO-MEMORY.md`
-- Legacy fallback: `{WORKING_DIR}/.gsd/AUTO-MEMORY.md`
+If the total unique `mem_id` count across facts + seeds in this unit's fragment would exceed 50, identify the lowest-scored entry (lowest `confidence_base` among seeds, or lowest hit count) and emit:
+```json
+{ "kind": "prune", "mem_id": "<lowest-id>", "ts": "<ISO8601 now>", "reason": "cap" }
+```
+Do NOT physically delete any fact. The sweep (S05) handles physical removal.
 
-Create the parent dir if missing: `mkdir -p` before write.
+<!-- pre-S04: W5 (decay) ran every 10 extractions — reduced confidence on stale entries, removed entries below 0.2, and rewrote the file header with incremented extraction_count. This branch is eliminated: decay is now computed on-projection (S05/R1), not as stored events. -->
+### W5 — Decay *(eliminated)*
 
-Use this structure:
-```markdown
-<!-- gsd-auto-memory | project: PROJECT_NAME | extraction_count: N -->
-<!-- ranked by: confidence × (1 + hits × 0.1) | cap: 50 active -->
+Decay is computed on-projection by the S05 projection engine, not manufactured as events here. Remove any branch that was checking `extraction_count mod 10`. Do not emit decay events; do not modify confidence values.
 
-## Gotcha
-- [MEM003] (gotcha) confidence:0.95 hits:4 — description in 1-2 sentences
-  source: execute-task/T02 | updated: YYYY-MM-DD
+<!-- pre-S04: W6 (extraction_count) was a header rewrite on AUTO-MEMORY.md incrementing extraction_count. Eliminated: event count now serves this purpose. -->
+### W6 — extraction_count *(eliminated)*
 
-## Convention
-...
+`extraction_count` is now derived from the total stats event count across all fragments. No header rewrite step needed.
 
-## Architecture
-...
+---
 
-## Pattern
-...
+### Emit via CLI
 
-## Environment
-...
+After building all facts and stat events for this run, pipe a single JSON fragment to `forge-memory.js --write`:
 
-## Preference
-...
+```bash
+echo '<JSON>' | node scripts/forge-memory.js --write --cwd <WORKING_DIR>
 ```
 
-Only include sections that have entries. Sort entries within each section by score descending: `confidence × (1 + hits × 0.1)`.
+The JSON shape:
+```json
+{
+  "unit_id": "<UNIT_ID>",
+  "facts": [ ...new fact objects (W1 / W3 new entries only)... ],
+  "stats": [ ...all stat events (W1 seed, W2 hit, W3 supersede, W4 prune)... ]
+}
+```
 
-## Step 5 — Promote to CLAUDE.md
+The CLI merges with any existing fragment (dedup by `mem_id` for facts, dedup by `SHA1(kind, mem_id, ts)` for stats). On success it prints `{"path":"...","created":true|false}` to stdout.
 
-After writing AUTO-MEMORY.md, identify promotion candidates:
-- `confidence >= 0.85` AND `hits >= 3`
+**If nothing was extracted** (no candidates passed the quality gate) → skip the `--write` call entirely. Do not emit an empty fragment.
+
+<!-- pre-S04: Step 4 wrote the complete updated AUTO-MEMORY.md file with a Write tool call, incrementing extraction_count in the header and rewriting the entire ranked list. -->
+## Step 4 — Verify write
+
+After the `--write` call, check its exit code. If non-zero, output the stderr to the result block as a warning. Do not retry.
+
+The fragment file is now at:
+```
+<WORKING_DIR>/.gsd/memory/<UNIT_ID>.md
+```
+
+This file stores raw facts and event log. The human-readable AUTO-MEMORY.md is rendered by the S05 projection engine on demand — not by this agent.
+
+<!-- pre-S04: Step 5 promoted memories to the project root CLAUDE file via Write/Edit tool calls when confidence >= 0.85 AND hits >= 3. This is eliminated — forge-memory must NOT write that file. Promotion destination is deferred to S05. -->
+## Step 5 — Promotion *(emit event only; S05 owns destination)*
+
+After writing the fragment, scan the existing facts (from Step 1 plus newly written) for promotion candidates:
+- `confidence_base >= 0.85` AND computed `hits >= 3` (count `hit` events for this `mem_id` across all stats)
 - Category is NOT `preference` or `environment`
+- Content does NOT describe a one-time bug fix (text does not contain "fixed", "patched", "workaround")
+- `hits >= 1` (not zero-hit high-confidence seeds)
 
-For each candidate:
+For each candidate that meets the threshold, emit a **stat event**:
+```json
+{ "kind": "promote", "mem_id": "<id>", "ts": "<ISO8601 now>", "threshold_met": true }
+```
 
-1. Read `{WORKING_DIR}/CLAUDE.md`
-2. Locate or create a `## Forge Auto-Rules` section (append at end of file if missing)
-3. If the rule is NOT already present (check by approximate content match — not exact string):
-   - Append inside that section:
-     ```
-     - [{MEM###}] {rule in one sentence} *(auto-promoted {date}, confidence:{score}, hits:{n})*
-     ```
+Include these promote events in the `--write` call stats array (or emit a second `--write` call if the first already completed).
+
+**S05's projection engine renders the promoted set; do not write the project root CLAUDE file from this agent.**
 
 **Do NOT promote:**
 - `preference` or `environment` memories
-- Memories describing a one-time bug fix (content contains "fixed", "patched", "workaround")
-- Rules that duplicate existing content in CLAUDE.md
-- Memories with `hits:0` even if high initial confidence
+- Memories with content matching "fixed", "patched", "workaround"
+- Memories with `hits < 1` even if high initial confidence_base
 
-If no candidates meet the threshold → skip this step silently. Do not modify CLAUDE.md.
+If no candidates meet the threshold → skip this step silently. Do not write anything.
 
-**Do not output anything else. Just write the files.**
+**Do not output anything else. Just run the Bash commands.**

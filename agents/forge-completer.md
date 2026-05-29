@@ -255,9 +255,11 @@ Given all `T##-SUMMARY.md` files from the slice:
 
     This sub-step is **advisory**. Do NOT return `status: blocked` based on verifier output. Do NOT abort merge. The section is purely documentation. If `scripts/forge-verifier.js` does not exist (e.g., running against a pre-M003/S03 checkout), write the fallback line and proceed.
 
-1.9. **Checker Memory update — append quality patterns to per-milestone `M###-CHECKER-MEMORY.md`** (advisory; skipped when `checker_memory.mode: disabled`).
+1.9. **Checker Memory update — emit quality events to fragment store** (advisory; skipped when `checker_memory.mode: disabled`).
 
-    **Multi-run (M004+):** writes go to `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-CHECKER-MEMORY.md` (per-milestone). The global `.gsd/CHECKER-MEMORY.md` is merged on `complete-milestone` via `scripts/forge-merger.js` (S05). All path references below — read and write — refer to the per-milestone file when `{M###}` is provided in the prompt. Legacy single-run fallback: `.gsd/CHECKER-MEMORY.md` direct.
+    <!-- pre-S04: rewrote M###-CHECKER-MEMORY.md monolith in-place; now emits events via forge-checker-memory.js -->
+
+    **Fragment store (M001/S04+):** events are written to `.gsd/checker-memory/{M###}.md` via `scripts/forge-checker-memory.js --write`. The fragment store is durable across `milestone_cleanup` — it is the source of truth. The global `.gsd/CHECKER-MEMORY.md` is now a projection rebuilt by `forge-merger.js` from the fragment store; it is no longer the write target. Legacy single-run fallback: if `{M###}` is not provided, skip this sub-step.
 
     Read the merged `checker_memory.mode` pref (same cascade as evidence.mode):
     ```bash
@@ -273,60 +275,34 @@ Given all `T##-SUMMARY.md` files from the slice:
     ```
     If the result is `disabled` → SKIP this entire sub-step.
 
-    a. **Extract plan-check results.** Read `{WORKING_DIR}/.gsd/milestones/{M###}/slices/{S##}/{S##}-PLAN-CHECK.md` if it exists.
+    a. **Extract plan-check results (C1).** Read `{WORKING_DIR}/.gsd/milestones/{M###}/slices/{S##}/{S##}-PLAN-CHECK.md` if it exists.
        Parse all dimension rows from the markdown table. Expected format per row: `| dimension | pass/warn/fail | justification |`.
        Collect only `warn` and `fail` rows → `PLAN_ISSUES: [{dimension, severity, justification}]`.
        If file doesn't exist or parse yields empty → `PLAN_ISSUES = []`.
 
-    b. **Extract verification failures.** Read `{WORKING_DIR}/.gsd/milestones/{M###}/slices/{S##}/{S##}-VERIFICATION.md` if it exists.
+    b. **Extract verification failures (C2).** Read `{WORKING_DIR}/.gsd/milestones/{M###}/slices/{S##}/{S##}-VERIFICATION.md` if it exists.
        Count rows by verdict: `exists_fail`, `substantive_fail`, `wired_fail`. Collect only non-zero fail counts → `VERIFY_ISSUES: [{pattern, count}]`.
        If file doesn't exist → `VERIFY_ISSUES = []`.
 
-    c. **Extract file audit flags.** Scan the `## File Audit` section of `S##-SUMMARY.md` (just written above).
+    c. **Extract file audit flags (C3).** Scan the `## File Audit` section of `S##-SUMMARY.md` (just written above).
        If entries appear under `**Unexpected**` → append `{pattern: "file_audit.unexpected", count: <N entries>}` to `VERIFY_ISSUES`.
        If entries appear under `**Missing**` → append `{pattern: "file_audit.missing", count: <N entries>}` to `VERIFY_ISSUES`.
 
-    d. **If `PLAN_ISSUES` and `VERIFY_ISSUES` are both empty** → skip writing; do NOT touch `CHECKER-MEMORY.md`. Absence is signal — clean slices must not pollute the file.
+    d. **If `PLAN_ISSUES` and `VERIFY_ISSUES` are both empty (C4)** → skip writing. Absence is signal — clean slices must not pollute the fragment store.
 
-    e. **Read or initialize `M###-CHECKER-MEMORY.md`** (per-milestone):
+    e. **Build event array (C5).** For each entry in `PLAN_ISSUES`, create an event object:
+       `{kind: "plan", dimension: <dimension>, severity: <severity>, slice: "<S##>", ts: "<ISO8601>"}`.
+       For each entry in `VERIFY_ISSUES`, create:
+       `{kind: "verify", dimension: <pattern>, severity: "fail", slice: "<S##>", ts: "<ISO8601>"}`.
+       Collect into `EVENTS: [...]`.
+
+    f. **Emit events to fragment store via CLI (C6).** Pipe the event payload as JSON to `forge-checker-memory.js --write`:
        ```bash
-       cat "{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-CHECKER-MEMORY.md" 2>/dev/null
+       echo '{"milestoneId":"{M###}","events":[...]}' | node "{WORKING_DIR}/scripts/forge-checker-memory.js" --write --cwd "{WORKING_DIR}"
        ```
-       If the file does not exist, treat as an empty document with no table rows. The global `.gsd/CHECKER-MEMORY.md` is NOT read here — its state during the run may be stale.
+       Substitute `{M###}` and the serialized `EVENTS` array. The CLI is idempotent — re-piping identical events produces no file change (SHA1 dedup on `kind+dimension+slice+ts`).
 
-    f. **Merge and update counts.** Parse the two existing tables (`## Plan Quality Patterns`, `## Verification Patterns`). For each incoming issue:
-       - If a row for the same `dimension` / `pattern` key exists → increment `Count`, update `Last Seen` to `{M###}/{S##}`, and update `Specific Pattern` if the new justification is more specific (longer).
-       - If no matching row exists → add a new row.
-       Apply decay: drop any row where `Count >= 5 AND Last Seen is more than 3 milestone numbers ago` (e.g. current M###=M020, last seen ≤ M016 → drop). This prevents stale resolved patterns from cluttering the file indefinitely.
-
-    g. **Write `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-CHECKER-MEMORY.md`** using the `Write` tool (structural rewrites make `Edit` fragile here). Create parent dir with `mkdir -p` first. Format:
-       ```markdown
-       # Checker Memory
-
-       _Auto-generated quality feedback. Updated after each complete-slice. Injected into forge-planner (plan-slice) and forge-executor (execute-task) as anti-recidivism guidance._
-       _Last updated: YYYY-MM-DD · Slices analyzed: N_
-
-       ---
-
-       ## Plan Quality Patterns
-
-       _Dimensions where the planner scored warn/fail in recent slices. Injected into forge-planner._
-
-       | Dimension | Severity | Count | Last Seen | Specific Pattern Observed |
-       |-----------|----------|-------|-----------|---------------------------|
-       | acceptance_observable | warn | 3 | M018/S02 | Criteria use vague language ("works correctly") instead of observable output (exit code, HTTP status, file path) |
-
-       ## Verification Patterns
-
-       _Recurring verification and file-audit failures. Injected into forge-executor._
-
-       | Pattern | Count | Last Seen | Advice |
-       |---------|-------|-----------|--------|
-       | substantive_fail | 2 | M018/S02 | Stub implementations flagged — ensure min_lines threshold is met before marking done |
-       ```
-       Omit a table entirely if it has no rows after merging.
-
-    This sub-step is **advisory**. Never return `status: blocked` based on this step. Write failures are silent (wrap in try/catch). `CHECKER-MEMORY.md` lives at `.gsd/` root and is never touched by `milestone_cleanup` — same durability contract as `AUTO-MEMORY.md` and `LEDGER.md`.
+    g. **Wrap in try/catch (C7).** This sub-step is **advisory**. Never return `status: blocked` based on this step. Write failures are silent. The fragment store at `.gsd/checker-memory/` is durable across `milestone_cleanup` — same durability contract as `.gsd/ledger/`, `AUTO-MEMORY.md` and `LEDGER.md`. The `.gsd/CHECKER-MEMORY.md` monolith (if present) is now a projection; the fragments are the authoritative source of truth.
 
 2. Write `S##-UAT.md` — human test script derived from must-haves:
    ```markdown
@@ -451,23 +427,26 @@ Given all `T##-SUMMARY.md` files from the slice:
    ```
 4. Emit milestone completion report: slices completed, total tasks, key decisions made
 
-5. **Write ledger entry + run merger** (per-milestone → globals under lockfile, M004+):
+5. **Write ledger fragment + run merger** (M001/S02+):
 
-   **5a. Write per-milestone ledger entry** to `{WORKING_DIR}/.gsd/milestones/{M###}/{M###}-LEDGER-ENTRY.md`. This is the block that the merger will append to the global `LEDGER.md`. Format (max 15 lines):
-   ```markdown
-   ## {M###} — {milestone title} · {YYYY-MM-DD}
-
-   {2-3 sentence description of what was built and delivered}
-
-   **Slices:** S01 — title · S02 — title · ...
-   **Key files:** path/to/file, path/to/file (up to 8, most important)
-   **Key decisions:** one-liner · one-liner (up to 3)
-
-   ---
+   **5a. Write LEDGER fragment** to `.gsd/ledger/<milestone-id>.md` via `forge-ledger.js`. The fragment is the source of truth — no global `LEDGER.md` write path in this step. Build a JSON payload and pipe it to the script:
+   ```bash
+   FORGE_SCRIPTS_DIR=$([ -f scripts/forge-ledger.js ] && echo scripts || echo "$HOME/.claude/scripts")
+   node "$FORGE_SCRIPTS_DIR/forge-ledger.js" --write --cwd "{WORKING_DIR}" <<'EOF'
+   {
+     "id": "{M###}",
+     "title": "{milestone title}",
+     "completed_at": "$(date -u +%FT%TZ)",
+     "slices": ["S01 — title", "S02 — title"],
+     "key_files": ["path/to/file"],
+     "key_decisions": ["one-liner"],
+     "body": "{2-3 sentence description of what was built and delivered. Keep under 10 lines. Focus on WHAT was built, not HOW.}"
+   }
+   EOF
    ```
-   Keep under 15 lines. Focus on WHAT was built, not HOW.
+   On failure: log a warning and continue — the LEDGER fragment is non-critical relative to the merger. Do not return `status: blocked`.
 
-   **5b. Invoke the merger** to promote all per-milestone files to workspace globals under lockfile:
+   **5b. Invoke the merger** to promote all per-milestone files to workspace globals under lockfile. Note: the merger no longer touches LEDGER (handled by the fragment write in 5a); DECISIONS/AUTO-MEMORY/CHECKER/events still merge normally.
    ```bash
    FORGE_SCRIPTS_DIR=$([ -f scripts/forge-merger.js ] && echo scripts || echo "$HOME/.claude/scripts")
    node "$FORGE_SCRIPTS_DIR/forge-merger.js" --milestone {M###} --cwd "{WORKING_DIR}" --holder "completer:{M###}"
@@ -475,13 +454,12 @@ Given all `T##-SUMMARY.md` files from the slice:
    The merger reads:
    - `M###-DECISIONS.md` → append rows (dedup by ID) to global `DECISIONS.md` under `.gsd/.locks/DECISIONS.md/`
    - `M###-AUTO-MEMORY.md` → promote entries (dedup by ID or description match), apply cap-50 with decay ordering, write `AUTO-MEMORY.md` under `.gsd/.locks/AUTO-MEMORY.md/`
-   - `M###-LEDGER-ENTRY.md` → append block to global `LEDGER.md` (idempotent on header match) under `.gsd/.locks/LEDGER.md/`
-   - `M###-CHECKER-MEMORY.md` → merge tables (accumulate Count, update Last Seen) into global `CHECKER-MEMORY.md` under `.gsd/.locks/CHECKER-MEMORY.md/`
+   - `M###-CHECKER-MEMORY.md` → _(deprecated S04)_ CHECKER events now live in the fragment store (`.gsd/checker-memory/`); this merge path is a no-op when fragments exist
    - `M###-events.jsonl` → append all lines to global `.gsd/forge/events.jsonl`
 
    Parse the JSON output. On non-empty `errors` array: emit warning but proceed (cleanup in step 6 is still safe — per-milestone files remain on disk). On success: log merge counts in the completion report.
 
-   The global `LEDGER.md`, `AUTO-MEMORY.md`, `DECISIONS.md`, `CHECKER-MEMORY.md`, `CODING-STANDARDS.md` and `STATE.md` (dashboard) are durable across `milestone_cleanup` — never touched by archive/delete.
+   The fragment store (`.gsd/ledger/`), `AUTO-MEMORY.md`, `DECISIONS.md`, `CHECKER-MEMORY.md`, `CODING-STANDARDS.md` and `STATE.md` (dashboard) are durable across `milestone_cleanup` — never touched by archive/delete.
 
 6. **Cleanup milestone artifacts** — based on `milestone_cleanup` from injected config:
    - `keep` (default): do nothing — all files remain
