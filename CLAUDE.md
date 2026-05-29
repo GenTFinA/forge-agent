@@ -179,7 +179,7 @@ forge-agent/
 ```yaml
 name: forge-planner
 description: ...
-model: "claude-opus-4-7[1m]"   # modelo base (fallback: claude-opus-4-6 via install-time probe)
+model: "claude-opus-4-8[1m]"   # modelo base (fallback: claude-opus-4-7[1m] via install-time probe)
 thinking: adaptive        # adaptive | disabled — extended thinking (opus only)
 effort: medium            # low | medium | high | max — intensidade de processamento
 tools: Read, Write, ...   # tools disponíveis
